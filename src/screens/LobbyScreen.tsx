@@ -22,9 +22,12 @@ export function LobbyScreen({ navigation }: any) {
     // Reset state on enter lobby to clear any stale Game Over or Match states
     useEffect(() => {
         reset();
-        LobbyService.monitorConnection(); // DIAGNOSTIC: Start monitoring RTDB connection
+        const unsubConnection = LobbyService.monitorConnection();
 
         return () => {
+            // Phase 42: Always unsubscribe connection listener to prevent memory leak
+            unsubConnection();
+
             // Cleanup: If we haven't navigated to the game yet, cancel any pending matches
             if (!hasNavigatedRef.current && status !== 'playing') {
                 console.log("[Lobby] Cleaning up: Cancelling match/room as we are leaving the screen before game start.");
@@ -169,12 +172,6 @@ export function LobbyScreen({ navigation }: any) {
                     </View>
                 </View>
 
-                {/* UID PROMINENT DISPLAY (For Debugging) */}
-                <View style={styles.uidContainer}>
-                    <Text style={styles.uidLabel}>YOUR PLAYER ID</Text>
-                    <Text style={styles.uidValue}>{uid || 'INITIALIZING...'}</Text>
-                    <Text style={styles.uidSub}>Confirm this is different on each device</Text>
-                </View>
             </View>
 
             <View style={styles.safeArea}>
@@ -223,8 +220,12 @@ export function LobbyScreen({ navigation }: any) {
                 ) : (
                     <View style={styles.waitingContainer}>
                         <BlurView intensity={50} tint="light" style={styles.waitingCard}>
-                            <Text style={styles.waitingLabel}>PRIVATE ROOM ID</Text>
-                            <Text style={styles.roomCode}>{roomId}</Text>
+                            {!useOnlinePvPStore.getState().isRanked && (
+                                <>
+                                    <Text style={styles.waitingLabel}>PRIVATE ROOM ID</Text>
+                                    <Text style={styles.roomCode}>{roomId}</Text>
+                                </>
+                            )}
                             <Text style={styles.statusText}>
                                 {isHost ? "WAITING FOR GUEST..." : "CONNECTED TO HOST"}
                             </Text>
@@ -300,7 +301,7 @@ const styles = StyleSheet.create({
     titleStack: {
         alignItems: 'center',
         marginTop: 5,
-        marginBottom: 40, // Significant separation from main content
+        marginBottom: 20, // Adjusted after UID removal
     },
     backText: {
         color: '#FFFFFF',
@@ -357,38 +358,6 @@ const styles = StyleSheet.create({
         color: '#4DA8DA',
         fontSize: 15,
         fontWeight: '900',
-    },
-    uidContainer: {
-        alignItems: 'center',
-        marginTop: -10,
-        marginBottom: 20,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        paddingVertical: 10,
-        borderRadius: 15,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-        marginHorizontal: 20
-    },
-    uidLabel: {
-        color: 'rgba(255,255,255,0.4)',
-        fontSize: 10,
-        fontWeight: '800',
-        letterSpacing: 2,
-        marginBottom: 4
-    },
-    uidValue: {
-        color: '#FFF',
-        fontSize: 14,
-        fontWeight: '900',
-        letterSpacing: 1,
-        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace'
-    },
-    uidSub: {
-        color: '#4DA8DA',
-        fontSize: 9,
-        fontWeight: '700',
-        marginTop: 4,
-        opacity: 0.8
     },
     mainContent: {
         marginTop: 40, // Pushed further down for centerpiece balance

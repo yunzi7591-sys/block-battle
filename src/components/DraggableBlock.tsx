@@ -13,7 +13,7 @@ import { useOnlinePvPStore } from '../store/onlinePvPStore';
 import { useUserStore } from '../store/userStore';
 import { BlockShape } from '../game/types';
 import { canPlace } from '../game/board';
-import { BOARD_CELL_MARGIN, BOARD_PADDING, TRAY_CELL_SIZE } from '../constants';
+import { BOARD_CELL_MARGIN, BOARD_PADDING, TRAY_CELL_SIZE, PREVIEW_Y_OFFSET, VISUAL_Y_OFFSET } from '../constants';
 import { StainedGlassCell } from './StainedGlassCell';
 import { hapticLight, hapticMedium, hapticError } from '../utils/haptics';
 import { playPlaceSound, playErrorSound, playBGM } from '../utils/sounds';
@@ -33,8 +33,8 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
     const [isDragging, setIsDragging] = useState(false);
     const isDraggingRef = useRef(false);
 
-    // Grab offset: where within the block view the finger touched
-    const grabOffsetRef = useRef<any>({ x: 0, y: 0, startX: 0, startY: 0, multX: 1.5, multY: 2.5, offsetY: -110 });
+    // Touch-start absolute position of the block's top-left grid area
+    const grabOffsetRef = useRef<{ initialAbsX: number; initialAbsY: number }>({ initialAbsX: 0, initialAbsY: 0 });
     const lastPreviewRef = useRef<{ row: number; col: number } | null>(null);
 
     // Dynamic Store Subscription
@@ -157,30 +157,20 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                 hapticLight();
 
                 const { pageX, pageY, locationX, locationY } = e.nativeEvent;
-                const targetScale = 1.1;
 
-                // 1. PRECISION INITIAL ABSOLUTE COORDINATES
-                // Using pageX - locationX captures the exact absolute Top-Left of the View,
-                // regardless of layout nesting or dock padding.
-                const initialAbsGridX = pageX - locationX + BLOCK_PADDING;
-                const initialAbsGridY = pageY - locationY + BLOCK_PADDING;
+                // Absolute top-left of the block's grid area at touch start
+                const initialAbsX = pageX - locationX + BLOCK_PADDING;
+                const initialAbsY = pageY - locationY + BLOCK_PADDING;
 
-                grabOffsetRef.current = {
-                    startX: pageX,
-                    startY: pageY,
-                    multX: 1.5,
-                    multY: 2.5,
-                    initialAbsGridX, // Absolute Anchor
-                    initialAbsGridY,
-                };
+                grabOffsetRef.current = { initialAbsX, initialAbsY };
 
-                // 2. UI INITIAL STATE (Float 60px above finger)
-                pan.setOffset({ x: 0, y: -60 });
+                // 3-Layer Y offset: Visual block floats at VISUAL_Y_OFFSET above finger
+                pan.setOffset({ x: 0, y: VISUAL_Y_OFFSET });
                 pan.setValue({ x: 0, y: 0 });
-                hapticLight();
 
+                // Scale to 1.0 — exact match with board cell size
                 Animated.spring(scaleAnim, {
-                    toValue: targetScale,
+                    toValue: 1.0,
                     friction: 8,
                     tension: 140,
                     useNativeDriver: true,
@@ -188,45 +178,53 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
             },
 
             onPanResponderMove: (
-                e: GestureResponderEvent,
+                _e: GestureResponderEvent,
                 gesture: PanResponderGestureState
             ) => {
                 if (!isDraggingRef.current) return;
-                const {
-                    multX, multY,
-                    initialAbsGridX, initialAbsGridY
-                } = grabOffsetRef.current;
+                const { initialAbsX, initialAbsY } = grabOffsetRef.current;
 
-                // 1. CALCULATE RELATIVE DELTA (UI)
-                const deltaX = gesture.dx * multX;
-                const deltaY = gesture.dy * multY;
+                // ─── 3-Layer Y-Axis Architecture ───────────────
+                //
+                //  Layer 1 — Touch:   gesture.dx, gesture.dy (raw finger delta)
+                //  Layer 2 — Preview: Touch + PREVIEW_Y_OFFSET (-40px)
+                //                     → Used for hit-test / grid snap
+                //  Layer 3 — Visual:  Touch + VISUAL_Y_OFFSET (-120px)
+                //                     → Used for block rendering (pan.setValue)
+                //
+                //  X axis: 1:1 tracking (dx used directly, no multiplier)
+                // ────────────────────────────────────────────────
 
-                // 2. CALCULATE ABSOLUTE TARGET (Logic SSoT)
-                // currentAbs = InitialAbsolute + RelativeDelta - 60px Drift
-                const currentAbsX = initialAbsGridX + deltaX;
-                const currentAbsY = initialAbsGridY + deltaY - 60;
+                const dx = gesture.dx; // X: pure 1:1 tracking
+                const dy = gesture.dy; // Y: raw finger delta
 
-                // 3. UI RENDERING (Relative)
-                pan.x.setValue(deltaX);
-                pan.y.setValue(deltaY);
+                // 1. UI RENDERING — block floats at VISUAL_Y_OFFSET above finger
+                //    pan.offset already set to VISUAL_Y_OFFSET in onGrant
+                pan.x.setValue(dx);
+                pan.y.setValue(dy);
+
+                // 2. HIT-TEST — preview snaps at PREVIEW_Y_OFFSET (closer to finger)
+                //    This is where the "shadow" on the board will appear
+                const previewTopLeftX = initialAbsX + dx;
+                const previewTopLeftY = initialAbsY + dy + PREVIEW_Y_OFFSET;
 
                 // Phase 38: Read fresh block from store to avoid stale closure
                 const currentGameState = useGameStore.getState();
                 const currentBoard = currentGameState.board;
                 const currentLayout = currentGameState.boardLayout;
                 const freshBlock = currentGameState.currentBlocks[index];
-                if (!freshBlock) return; // Block was placed or nulled out
+                if (!freshBlock) return;
 
-                // 4. LOGICAL HIT-TEST (Using identical Absolute coordinates)
+                // 3. GRID SNAP using preview coordinates
                 const target = calcBestGridPosition(
-                    currentAbsX,
-                    currentAbsY,
+                    previewTopLeftX,
+                    previewTopLeftY,
                     currentBoard,
                     currentLayout,
                     freshBlock
                 );
 
-                // PERFORMANCE CRITICAL: Only trigger global state update if logical grid position changed
+                // PERFORMANCE: Only trigger state update if grid position changed
                 if (target) {
                     const isNewPos = !lastPreviewRef.current ||
                         lastPreviewRef.current.row !== target.row ||
@@ -243,7 +241,6 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                         });
                     }
                 } else {
-                    // Only clear preview if it was previously set
                     if (lastPreviewRef.current !== null) {
                         lastPreviewRef.current = null;
                         activeSetPreview(null);

@@ -1,15 +1,16 @@
 import React, { useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, Dimensions, Animated, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, Dimensions, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
-import { Ionicons } from '@expo/vector-icons';
 import { CathedralBackground } from '../components/CathedralBackground';
 import { BoardView } from '../components/BoardView';
 import { BlockPicker } from '../components/BlockPicker';
+import { GameOverOverlay } from '../components/GameOverOverlay';
 import { useOnlinePvPStore } from '../store/onlinePvPStore';
 import { useUserStore } from '../store/userStore';
 import { playGongSound } from '../utils/sounds';
 import { useGameStore } from '../store/gameStore';
+import { usePvPAppStateGuard } from '../hooks/useAppStateListener';
 
 const { width } = Dimensions.get('window');
 
@@ -49,14 +50,31 @@ export function PvPGameScreen({ navigation }: any) {
     }, [store.timeLeft]);
 
     // GameOver Handling
+    // NOTE: Rating update is now handled server-side by Cloud Functions.
+    // calculateRatingChange in store is kept for UI display only (provisional delta).
     useEffect(() => {
         if (store.isGameOver) {
             playGongSound();
-            if (store.isRanked) {
-                useUserStore.getState().updateRating(store.rating);
-            }
         }
-    }, [store.isGameOver, store.rating, store.isRanked]);
+    }, [store.isGameOver]);
+
+    // Phase 42: AppState Guard — background timeout defeat
+    usePvPAppStateGuard(
+        store.status === 'playing' && !store.isGameOver,
+        () => {
+            // 30秒バックグラウンド経過 → 自分のターンなら敗北報告
+            const pvp = useOnlinePvPStore.getState();
+            const user = useUserStore.getState();
+            if (pvp.currentTurn === user.uid && !pvp.isGameOver) {
+                console.warn('[AppState/Timeout] Background timeout expired during my turn. Reporting defeat.');
+                pvp.reportDefeat();
+            }
+        },
+        () => {
+            // フォアグラウンド復帰 → tickTimer が次の 500ms で状態を自動再評価
+            console.log('[AppState/Resume] Returned to foreground. Timer will re-evaluate.');
+        }
+    );
 
     // Phase 22: Strict Initialization Guard (LATCHED - once true, stays true)
     const hasBeenReady = useRef(false);
@@ -97,19 +115,44 @@ export function PvPGameScreen({ navigation }: any) {
 
             <SafeAreaView style={styles.safeArea}>
                 {/* Status Bar / Player Indicator */}
-                <View style={styles.header}>
-                    <View style={styles.playerTag}>
-                        <View style={[styles.dot, { backgroundColor: turnColor }]} />
-                        <Text style={[styles.playerText, { color: turnColor }]}>
-                            {isMyTurn ? "YOUR TURN" : "OPPONENT'S TURN"}
+                {/* Versus Header / HUD */}
+                <View style={styles.vsHeader}>
+                    {/* Player 1 (Left) */}
+                    <View style={[styles.playerInfo, { alignItems: 'flex-start' }]}>
+                        <View style={[styles.avatarGlow, { backgroundColor: store.currentTurn === store.player1?.uid ? '#4DA8DA' : 'rgba(255,255,255,0.05)' }]} />
+                        <Text style={[styles.userName, store.currentTurn === store.player1?.uid && { color: '#4DA8DA' }]} numberOfLines={1}>
+                            {store.player1?.name || "HOST"}
                         </Text>
+                        <Text style={styles.ratingText}>{store.player1?.rate || 1500}</Text>
                     </View>
 
-                    {/* Timer */}
-                    <Animated.View style={[styles.timerContainer, { opacity: timerAnim }]}>
-                        <View style={[styles.timerBar, { width: `${(store.timeLeft / 30) * 100}%`, backgroundColor: store.timeLeft <= 5 ? '#FF4B2B' : '#FFF' }]} />
-                        <Text style={[styles.timerText, store.timeLeft <= 5 && { color: '#FF4B2B' }]}>{store.timeLeft}s</Text>
-                    </Animated.View>
+                    {/* VS Indicator & Timer */}
+                    <View style={styles.vsCenter}>
+                        <Text style={styles.vsText}>VS</Text>
+                        <Animated.View style={[styles.timerCircle, { opacity: timerAnim, borderColor: store.timeLeft <= 5 ? '#FF4B2B' : 'rgba(255,255,255,0.2)' }]}>
+                            <Text style={[styles.timerTextMain, store.timeLeft <= 5 && { color: '#FF4B2B' }]}>{store.timeLeft}</Text>
+                        </Animated.View>
+                    </View>
+
+                    {/* Player 2 (Right) */}
+                    <View style={[styles.playerInfo, { alignItems: 'flex-end' }]}>
+                        <View style={[styles.avatarGlow, { backgroundColor: store.currentTurn === store.player2?.uid ? '#E94560' : 'rgba(255,255,255,0.05)' }]} />
+                        <Text style={[styles.userName, store.currentTurn === store.player2?.uid && { color: '#E94560' }]} numberOfLines={1}>
+                            {store.player2?.name || "GUEST"}
+                        </Text>
+                        <Text style={styles.ratingText}>{store.player2?.rate || 1500}</Text>
+                    </View>
+                </View>
+
+                {/* Turn Progress Bar */}
+                <View style={styles.progressContainer}>
+                    <View style={[
+                        styles.progressBar,
+                        {
+                            width: `${(store.timeLeft / 30) * 100}%`,
+                            backgroundColor: store.timeLeft <= 5 ? '#FF4B2B' : turnColor
+                        }
+                    ]} />
                 </View>
 
                 {/* Shared Board */}
@@ -128,50 +171,17 @@ export function PvPGameScreen({ navigation }: any) {
                     <BlockPicker isPvP={true} />
                 </View>
 
-                {/* Game Over Overlay */}
+                {/* Game Over Overlay — Phase B: Rich animated result screen */}
                 {store.isGameOver && (
-                    <BlurView intensity={90} tint="dark" style={styles.gameOverOverlay}>
-                        {(() => {
-                            const isWin = store.winner === myUid;
-                            return (
-                                <View style={styles.gameOverContent}>
-                                    <Ionicons
-                                        name={isWin ? "trophy" : "close-circle"}
-                                        size={80}
-                                        color={isWin ? "#FFD700" : "#E94560"}
-                                    />
-                                    <Text style={[styles.resultTitle, { color: isWin ? "#FFD700" : "#E94560" }]}>
-                                        {isWin ? "VICTORY" : "DEFEAT"}
-                                    </Text>
-                                    <Text style={styles.userNameText}>{useUserStore.getState().userName}</Text>
-
-                                    {store.isRanked && store.ratingChange !== null && (
-                                        <View style={styles.ratingResultContainer}>
-                                            <Text style={styles.ratingLabel}>RANKED MATCH RESULT</Text>
-                                            <View style={styles.ratingRow}>
-                                                <Text style={styles.ratingValue}>{store.rating - store.ratingChange}</Text>
-                                                <Ionicons name="arrow-forward" size={16} color="rgba(255,255,255,0.4)" />
-                                                <View style={styles.newRatingContainer}>
-                                                    <Text style={styles.ratingValue}>{store.rating}</Text>
-                                                    <Text style={[styles.deltaText, { color: store.ratingChange >= 0 ? '#4CAF50' : '#FF5252' }]}>
-                                                        ({store.ratingChange >= 0 ? `+${store.ratingChange}` : store.ratingChange})
-                                                    </Text>
-                                                </View>
-                                            </View>
-                                        </View>
-                                    )}
-
-                                    {!store.isRanked && (
-                                        <Text style={styles.unrankedLabel}>UNRANKED MATCH</Text>
-                                    )}
-
-                                    <TouchableOpacity style={styles.exitBtn} onPress={() => navigation.navigate('Home')}>
-                                        <Text style={styles.exitBtnText}>RETURN TO MENU</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            );
-                        })()}
-                    </BlurView>
+                    <GameOverOverlay
+                        isWin={store.winner === myUid}
+                        userName={useUserStore.getState().userName || ''}
+                        isRanked={store.isRanked}
+                        ratingChange={store.ratingChange}
+                        oldRating={store.ratingChange !== null ? store.rating - store.ratingChange : store.rating}
+                        newRating={store.rating}
+                        onExit={() => navigation.navigate('Home')}
+                    />
                 )}
 
                 {/* Sync Overlay (Phase 20) */}
@@ -191,30 +201,37 @@ export function PvPGameScreen({ navigation }: any) {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#000' },
     safeArea: { flex: 1 },
-    header: { padding: 20, alignItems: 'center' },
-    playerTag: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 15 },
-    dot: { width: 10, height: 10, borderRadius: 5 },
-    playerText: { fontSize: 18, fontWeight: '900', letterSpacing: 2 },
-    timerContainer: { width: '80%', height: 4, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 2, overflow: 'hidden' },
-    timerBar: { height: '100%' },
-    timerText: { color: '#FFF', fontSize: 12, fontWeight: '700', marginTop: 10 },
+    vsHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 25,
+        paddingVertical: 15,
+        backgroundColor: 'rgba(255,255,255,0.03)',
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(255,255,255,0.05)'
+    },
+    playerInfo: { flex: 1, gap: 2 },
+    avatarGlow: { width: 30, height: 4, borderRadius: 2, marginBottom: 4 },
+    userName: { color: 'rgba(255,255,255,0.9)', fontSize: 13, fontWeight: '900', letterSpacing: 1 },
+    ratingText: { color: 'rgba(255,255,255,0.3)', fontSize: 10, fontWeight: '700' },
+    vsCenter: { width: 60, alignItems: 'center' },
+    vsText: { color: 'rgba(255,255,255,0.2)', fontSize: 10, fontWeight: '900', marginBottom: 5 },
+    timerCircle: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        borderWidth: 2,
+        justifyContent: 'center',
+        alignItems: 'center'
+    },
+    timerTextMain: { color: '#FFF', fontSize: 14, fontWeight: '900' },
+    progressContainer: { height: 2, width: '100%', backgroundColor: 'rgba(255,255,255,0.05)' },
+    progressBar: { height: '100%' },
     boardContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     waitingOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 10 },
-    waitingText: { color: '#FFF', fontWeight: '800', fontSize: 20, letterSpacing: 2, opacity: 0.7 },
-    trayContainer: { height: 200, justifyContent: 'center' },
-    gameOverOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 100 },
-    gameOverContent: { alignItems: 'center', width: '100%', padding: 40 },
-    resultTitle: { fontSize: 48, fontWeight: '900', letterSpacing: 5, marginTop: 20 },
-    userNameText: { color: '#FFF', fontSize: 18, fontWeight: '700', marginTop: 5, marginBottom: 30, opacity: 0.8 },
-    ratingResultContainer: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)', padding: 20, borderRadius: 20, marginBottom: 40, width: '80%' },
-    ratingLabel: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: '800', letterSpacing: 2, marginBottom: 12 },
-    ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-    ratingValue: { color: '#FFF', fontSize: 24, fontWeight: '900' },
-    newRatingContainer: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
-    deltaText: { fontSize: 16, fontWeight: '700' },
-    unrankedLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 14, fontWeight: '700', letterSpacing: 1, marginBottom: 40 },
-    exitBtn: { backgroundColor: '#FFF', paddingHorizontal: 40, paddingVertical: 15, borderRadius: 30 },
-    exitBtnText: { color: '#000', fontWeight: '800' },
+    waitingText: { color: '#FFF', fontWeight: '800', fontSize: 18, letterSpacing: 2, opacity: 0.6 },
+    trayContainer: { height: 180, justifyContent: 'center' },
     syncingOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 200 },
     syncingText: { color: '#FFF', fontSize: 24, fontWeight: '900', letterSpacing: 2 },
     syncingSub: { color: 'rgba(255,255,255,0.4)', fontSize: 12, marginTop: 10, fontWeight: '700' }

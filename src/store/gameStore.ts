@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { subscribeWithSelector } from 'zustand/middleware';
 import { GameState, BlockShape, Board } from '../game/types';
 import {
     createBoard,
@@ -53,6 +54,7 @@ interface GameStore extends GameState {
     finishClear: () => void;
     resetPerfectClear: () => void;
     triggerBGM: () => void;
+    resetTurnState: (blocks: (BlockShape | null)[]) => void;
 }
 
 function makeInitialState() {
@@ -83,26 +85,29 @@ let perfectClearTimer: ReturnType<typeof setTimeout> | null = null;
 
 function checkGameOverState(
     board: Board,
-    blocks: BlockShape[],
+    blocks: (BlockShape | null)[],
     flags: boolean[]
 ): boolean {
-    const isGameOver = flags.every((f, i) => f || !hasAnyValidPlacement(board, blocks[i]));
+    const unplacedIndices = flags
+        .map((f, i) => (!f && blocks[i] !== null ? i : -1))
+        .filter(idx => idx !== -1);
+
+    if (unplacedIndices.length === 0) return false; // All placed or null
+
+    const isGameOver = unplacedIndices.every(idx => !hasAnyValidPlacement(board, blocks[idx] as BlockShape));
 
     if (isGameOver) {
-        console.log('[GameOver Audit] Survival Impossible Check:');
-        blocks.forEach((b, i) => {
-            if (!flags[i]) {
-                console.log(` - Block [${b.id}] (${b.color}): No valid placements found on 8x8 board.`);
-            } else {
-                console.log(` - Block [${b.id}]: Already placed.`);
-            }
+        console.log('[GameOver Audit] Survival Impossible Check (PvP Optimized):');
+        unplacedIndices.forEach(idx => {
+            const b = blocks[idx] as BlockShape;
+            console.log(` - Block [${b.id}] (${b.color}): No valid placements found on 8x8 board.`);
         });
     }
 
     return isGameOver;
 }
 
-export const useGameStore = create<GameStore>((set) => ({
+export const useGameStore = create<GameStore>()(subscribeWithSelector((set, get) => ({
     ...makeInitialState(),
     boardLayout: null,
     preview: null,
@@ -136,10 +141,14 @@ export const useGameStore = create<GameStore>((set) => ({
             return;
         }
 
-        set({
+        const isFreshSet = safeBlocks.every(b => b !== null);
+
+        set((state) => ({
             currentBlocks: safeBlocks as (BlockShape | null)[],
-            placedFlags: safeBlocks.map(b => b === null)
-        });
+            placedFlags: safeBlocks.map(b => b === null),
+            // Phase 38: If this is a fresh set (3 blocks), reset move count.
+            lastAppliedMoveCount: isFreshSet ? 0 : state.lastAppliedMoveCount
+        }));
     },
     setPreview: (preview) => set({ preview }),
     setPvPMode: (isPvP) => set({ isPvP }),
@@ -262,14 +271,12 @@ export const useGameStore = create<GameStore>((set) => ({
 
             // CRITICAL: Check game over AFTER refill/reset if it happened
             const filteredBlocks = (nextBlocks.filter(b => b !== null) as BlockShape[]);
-            const gameOver = state.isPvP ? false : checkGameOverState(newBoard, filteredBlocks, nextFlags);
+            // CRITICAL: Check game over AFTER refill/reset if it happened
+            const gameOver = checkGameOverState(newBoard, nextBlocks, nextFlags);
 
             const userStore = useUserStore.getState();
             if (totalScore > userStore.highScore) {
                 userStore.updateHighScore(totalScore);
-                if (userStore.uid) {
-                    apiService.updateUserData(userStore.uid, { highScore: totalScore }).catch(() => { });
-                }
             }
 
             return {
@@ -303,10 +310,6 @@ export const useGameStore = create<GameStore>((set) => ({
 
             if (newScore > userStore.highScore) {
                 userStore.updateHighScore(newScore);
-                // Background Sync
-                if (userStore.uid) {
-                    apiService.updateUserData(userStore.uid, { highScore: newScore }).catch(() => { });
-                }
             }
 
             const allPlaced = state.placedFlags.every((f) => f);
@@ -328,7 +331,8 @@ export const useGameStore = create<GameStore>((set) => ({
 
             // CRITICAL: Check game over AFTER refill/reset if it happened
             const filteredBlocks = (nextBlocks.filter(b => b !== null) as BlockShape[]);
-            const gameOver = state.isPvP ? false : checkGameOverState(newBoard, filteredBlocks, nextFlags);
+            // CRITICAL: Check game over AFTER refill/reset if it happened
+            const gameOver = checkGameOverState(newBoard, nextBlocks, nextFlags);
 
             return {
                 ...state,
@@ -353,4 +357,18 @@ export const useGameStore = create<GameStore>((set) => ({
         if (perfectClearTimer) clearTimeout(perfectClearTimer);
         perfectClearTimer = setTimeout(() => { set({ showPerfectClear: false }); perfectClearTimer = null; }, 2000);
     },
-}));
+
+    resetTurnState: (blocks) => {
+        const safeBlocks = Array.isArray(blocks) ? blocks : (blocks ? Object.values(blocks) : []);
+        set({
+            currentBlocks: safeBlocks as (BlockShape | null)[],
+            lastAppliedMoveCount: 0,
+            preview: null,
+            clearingCells: null,
+            scoreEarned: null,
+            showPerfectClear: false,
+            isGameOver: checkGameOverState(get().board, safeBlocks as (BlockShape | null)[], safeBlocks.map(b => b === null))
+        });
+        console.log(`[gameStore] Turn state explicitly reset. Blocks: ${safeBlocks.filter(b => b !== null).length}`);
+    }
+})));

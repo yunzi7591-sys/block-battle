@@ -39,10 +39,12 @@ export interface RoomData {
     player1: PlayerInfo;
     player2?: PlayerInfo;
     isPrivate: boolean;
+    isRanked: boolean;
     createdAt: number;
     winner?: string; // UID
     loser?: string;  // UID
     isFinished?: boolean;
+    isRatingCalculated?: boolean; // Cloud Functions idempotency flag
 
     // Phase 19: Turn-based shared board
     board: Board;
@@ -51,6 +53,7 @@ export interface RoomData {
     placedCount: number; // 0, 1, 2
     turnStartTime: any; // Server Timestamp
     turnDuration: number; // 30000ms
+    gameStartTime?: any; // Server Timestamp — cheat detection (Cloud Functions)
     lastMove?: LastMove;
 }
 
@@ -59,7 +62,7 @@ export interface RoomData {
  * Firebase deletes keys set to null, turning [A, null, B] into {0: A, 2: B}.
  * This restores it to [A, null, B] with guaranteed length 3.
  */
-function normalizeBlocks(raw: any): (BlockShape | null)[] {
+export function normalizeBlocks(raw: any): (BlockShape | null)[] {
     if (!raw) return [null, null, null];
     const result: (BlockShape | null)[] = [null, null, null];
     if (Array.isArray(raw)) {
@@ -73,6 +76,30 @@ function normalizeBlocks(raw: any): (BlockShape | null)[] {
         }
     }
     return result;
+}
+
+/**
+ * Robustly normalize Board (8x8) from sparse Firebase object or nested sparse objects.
+ */
+export function normalizeBoard(boardRaw: any): Board {
+    const emptyBoard = (): Board => Array.from({ length: 8 }, () => Array(8).fill(0));
+    if (!boardRaw) return emptyBoard();
+
+    const board: Board = emptyBoard();
+
+    // Map rows (could be array or object-like from RTDB)
+    for (let r = 0; r < 8; r++) {
+        const rowRaw = boardRaw[r] ?? boardRaw[String(r)];
+        if (rowRaw) {
+            for (let c = 0; c < 8; c++) {
+                const cell = rowRaw[c] ?? rowRaw[String(c)];
+                if (cell !== undefined) {
+                    board[r][c] = cell;
+                }
+            }
+        }
+    }
+    return board;
 }
 
 export const LobbyService = {
@@ -93,22 +120,27 @@ export const LobbyService = {
     },
 
     /**
+     * Helper to generate a 4-digit numeric string (0000-9999)
+     */
+    generate4DigitCode: (): string => {
+        return Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+    },
+
+    /**
      * Creates a new match room in RTDB.
      */
-    createRoom: async (player1: PlayerInfo, isPrivate: boolean = false): Promise<string> => {
-        console.log(`[RTDB/Diag] createRoom invoked. Auth: ${auth.currentUser?.uid || 'NONE'}`);
-        const roomsRef = ref(rtdb, 'rooms');
-        const newRoomRef = push(roomsRef);
-        const roomId = newRoomRef.key!;
+    createRoom: async (player1: PlayerInfo, isPrivate: boolean = false, isRanked: boolean = false): Promise<string> => {
+        console.log(`[RTDB/Diag] createRoom invoked (isPrivate: ${isPrivate}, isRanked: ${isRanked}). Auth: ${auth.currentUser?.uid || 'NONE'}`);
 
-        // Initial board and blocks
+        // Initial board and blocks for fresh room data
         const initialBoard = Array.from({ length: 8 }, () => Array(8).fill(0));
         const initialBlocks = generatePvPBlocks(initialBoard);
 
-        const roomData: RoomData = {
+        const freshRoomData: RoomData = {
             status: 'waiting',
             player1,
             isPrivate,
+            isRanked,
             createdAt: Date.now(),
             isFinished: false,
             board: initialBoard,
@@ -119,10 +151,52 @@ export const LobbyService = {
             turnDuration: 30000
         };
 
-        await onDisconnect(newRoomRef).remove();
-        await set(newRoomRef, roomData);
-        console.log(`[RTDB/Path] Created Room at: rooms/${roomId}`);
-        return roomId;
+        if (!isPrivate) {
+            // Standard Public/Ranked Room: Use Firebase Push ID
+            const roomsRef = ref(rtdb, 'rooms');
+            const newRoomRef = push(roomsRef);
+            const roomId = newRoomRef.key!;
+            await onDisconnect(newRoomRef).remove();
+            await set(newRoomRef, freshRoomData);
+            console.log(`[RTDB/Path] Created Public Room at: rooms/${roomId}`);
+            return roomId;
+        }
+
+        // --- Private Room: 4-Digit ID with Collision Retry Loop ---
+        let attempts = 0;
+        const maxAttempts = 10;
+
+        while (attempts < maxAttempts) {
+            const code = LobbyService.generate4DigitCode();
+            const roomRef = ref(rtdb, `rooms/${code}`);
+
+            console.log(`[RTDB/Private] Attempting to claim ID: ${code} (Attempt ${attempts + 1}/${maxAttempts})`);
+
+            try {
+                const result = await runTransaction(roomRef, (currentData: RoomData | null) => {
+                    // ID is available if it doesn't exist OR if previous match is 'finished'
+                    if (currentData === null || currentData.status === 'finished') {
+                        // CRITICAL: Return the NEW object to completely OVERWRITE the node.
+                        // This wipes board, player2, and any other stale session data.
+                        return freshRoomData;
+                    }
+                    // Node is active ('waiting' or 'playing'): Reject and retry
+                    return; // Abort transaction
+                });
+
+                if (result.committed) {
+                    console.log(`[RTDB/Private] Successfully claimed ID: ${code}`);
+                    await onDisconnect(roomRef).remove();
+                    return code;
+                }
+            } catch (error) {
+                console.error(`[RTDB/Private] Transaction error for ${code}:`, error);
+            }
+
+            attempts++;
+        }
+
+        throw new Error("Failed to generate a unique 4-digit Room ID after 10 attempts. Please try again.");
     },
 
     /**
@@ -179,6 +253,22 @@ export const LobbyService = {
                     // CRITICAL: Normalize sparse Firebase blocks before mutation
                     data.currentBlocks = normalizeBlocks(data.currentBlocks);
                     data.currentBlocks[index] = null;
+
+                    // PHASE 40: Atomic Stalemate Detection (Case 1: Mid-turn stuck)
+                    const remainingBlocks = data.currentBlocks.filter((b): b is BlockShape => b != null);
+                    const canContinue = remainingBlocks.some(b => hasAnyValidPlacement(data.board, b));
+                    const isThreePlaced = (data.placedCount || 0) + 1 >= 3;
+
+                    if (!isThreePlaced && !canContinue) {
+                        console.log(`[Lobby/Atomic] Stalemate detected for player ${uid}. Wrapping game.`);
+                        data.status = 'finished';
+                        data.isFinished = true;
+                        // Winner is the EXCEPTING player (the one who is NOT the current player who just got stuck)
+                        data.winner = data.player1.uid === uid ? (data.player2?.uid || "") : data.player1.uid;
+                        data.loser = uid;
+                        return data;
+                    }
+
                     data.placedCount = 0; // Reset for next turn
                     data.lastMove = { uid, index, row, col, timestamp: Date.now() };
 
@@ -217,6 +307,15 @@ export const LobbyService = {
         try {
             const result = await runTransaction(roomRef, (currentData: RoomData | null) => {
                 if (!currentData || currentData.winner) return;
+
+                // Phase 42: Player validation — winner and loser must be actual participants
+                const p1 = currentData.player1?.uid;
+                const p2 = currentData.player2?.uid;
+                if (!p1 || !p2) return; // Room incomplete
+                if (winnerUid !== p1 && winnerUid !== p2) return; // Winner not a participant
+                if (loserUid !== p1 && loserUid !== p2) return;  // Loser not a participant
+                if (winnerUid === loserUid) return; // Same player can't be both
+
                 currentData.winner = winnerUid;
                 currentData.loser = loserUid;
                 currentData.status = 'finished';
@@ -290,6 +389,7 @@ export const LobbyService = {
                 currentTurn: myUid, // Explicitly use my current UID (Host)
                 placedCount: 0,
                 turnStartTime: serverTimestamp(),
+                gameStartTime: serverTimestamp(), // Phase 42: Cheat detection — Cloud Functions validates min duration
             };
 
             await update(roomRef, updates);

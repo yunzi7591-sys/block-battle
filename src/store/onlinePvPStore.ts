@@ -1,8 +1,9 @@
 import { create } from 'zustand';
+import { subscribeWithSelector } from 'zustand/middleware';
 import { Board, BlockShape } from '../game/types';
 import { createBoard, placeBlock, clearLines, canPlace, hasAnyValidPlacement } from '../game/board';
 import { useUserStore } from './userStore';
-import { LobbyService, PlayerInfo, RoomData } from '../services/LobbyService';
+import { LobbyService, PlayerInfo, RoomData, normalizeBlocks, normalizeBoard } from '../services/LobbyService';
 import { ref, get as dbGet } from 'firebase/database';
 import { rtdb } from '../config/firebase';
 import { apiService } from '../services/apiService';
@@ -16,12 +17,14 @@ interface OnlinePvPState {
     currentBlocks: (BlockShape | null)[];
     timeLeft: number;
     isGameOver: boolean;
-    winner: number | null;
+    winner: string | null; // UID
     status: 'matching' | 'playing' | 'finished';
     isMatching: boolean;
     matchingLocked: boolean;
     boardLayout: { x: number, y: number, size: number, cellSize: number } | null;
     preview: { shape: BlockShape, row: number, col: number } | null;
+    player1: PlayerInfo | null;
+    player2: PlayerInfo | null;
 
     // Phase 19: Turn-based & Sync
     currentTurn: string | null; // UID
@@ -40,7 +43,7 @@ interface OnlinePvPState {
     lastOptimisticMoveTime: number; // Phase 21 Debug
 
     // Actions
-    createRoom: (isPrivate?: boolean) => void;
+    createRoom: (isPrivate?: boolean, isRanked?: boolean) => void;
     joinRoom: (id: string) => Promise<boolean>;
     startAutoMatch: () => void;
     cancelAutoMatch: () => void;
@@ -60,13 +63,7 @@ interface OnlinePvPState {
     lastTimeoutReportTime: number; // Phase 36: Suppress rapid-fire timeout reports
 }
 
-const normalizeBoard = (boardRaw: any): Board => {
-    if (!boardRaw) return Array.from({ length: 8 }, () => Array(8).fill(0));
-    const arr = Array.isArray(boardRaw) ? boardRaw : Object.values(boardRaw);
-    return arr.map((row: any) => Array.isArray(row) ? row : Object.values(row)) as Board;
-};
-
-export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
+export const useOnlinePvPStore = create<OnlinePvPState>()(subscribeWithSelector((set, get) => ({
     roomId: null,
     isHost: false,
     sharedBoard: createBoard(),
@@ -80,6 +77,8 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
     matchingLocked: false,
     boardLayout: null,
     preview: null,
+    player1: null,
+    player2: null,
     rating: useUserStore.getState().rating,
     opponentRating: 1500,
     ratingChange: null,
@@ -98,7 +97,7 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
     isProcessingPlacement: false,
     lastTimeoutReportTime: 0,
 
-    createRoom: async (isPrivate: boolean = true) => {
+    createRoom: async (isPrivate: boolean = true, isRanked: boolean = false) => {
         const user = useUserStore.getState();
         const playerInfo: PlayerInfo = {
             uid: user.uid!,
@@ -106,8 +105,8 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
             rate: user.rating,
         };
 
-        const id = await LobbyService.createRoom(playerInfo, isPrivate);
-        set({ roomId: id, isHost: true, myPlayerNumber: 1, status: 'matching', isRanked: false });
+        const id = await LobbyService.createRoom(playerInfo, isPrivate, isRanked);
+        set({ roomId: id, isHost: true, myPlayerNumber: 1, status: 'matching', isRanked });
 
         // Phase 25: Guard against double subscription
         const state = get();
@@ -116,6 +115,11 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
 
         // Listen for Updates (Guest Join & Win/Sync)
         const unsub = LobbyService.subscribeToRoom(id, (roomData: RoomData) => {
+            set({
+                player1: roomData.player1,
+                player2: roomData.player2 || null,
+                isRanked: !!roomData.isRanked
+            });
             const state = get();
             const user = useUserStore.getState();
 
@@ -145,37 +149,63 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
                 if (!gameStore.isPvP) gameStore.setPvPMode(true);
 
                 // Phase 27/29: Turn Synchronization
+                // Phase 21/22: Reconciliation (Moved up for use in Turn Reset)
+                const serverMoveCount = roomData.placedCount || 0;
+                const serverBoard = normalizeBoard(roomData.board);
+                const serverBlocks = normalizeBlocks(roomData.currentBlocks);
+
                 const currentUid = (user.uid || "").trim();
                 const serverTurnUid = (roomData.currentTurn || "").trim();
+
+                // Phase 38: Guard against partial room updates (Flicker prevention)
+                if (!serverTurnUid && roomData.status === 'playing') {
+                    console.log("[PvP/Guard] Skipping sync due to empty serverTurnUid in playing room.");
+                    return;
+                }
+
                 const isMyTurn = currentUid === serverTurnUid;
+
+                // Phase 38: Robust Turn Change Detection
+                const prevTurnUid = state.currentTurn;
+                const turnChanged = prevTurnUid !== null && prevTurnUid !== serverTurnUid;
+
+                if (turnChanged) {
+                    console.log(`[PvP/Turn] Turn transition detected: ${prevTurnUid} -> ${serverTurnUid}`);
+                    // 1. Release PvP locks
+                    set({
+                        pendingMoveCount: 0,
+                        isProcessingPlacement: false,
+                        lastOptimisticMoveTime: 0
+                    });
+
+                    // 2. FORCE gameStore Reset (Wipes stale placedFlags/counts using fresh server blocks)
+                    gameStore.resetTurnState(serverBlocks);
+                }
 
                 // Push Turn status to gameStore (Authority for Drag/UI)
                 gameStore.setIsMyTurn(isMyTurn);
 
-                // Phase 21/22: Reconciliation
-                const serverMoveCount = roomData.placedCount || 0;
-                const serverBoard = normalizeBoard(roomData.board);
-
                 // Phase 37: Turn-Transition-Aware Guard
-                // When server sends placedCount=0 with 3 fresh blocks, this is a NEW TURN.
-                // We MUST sync regardless of isProcessingPlacement (which may be stale from prev turn).
-                const isFreshTurn = serverMoveCount === 0 && blocksArray.length === 3 &&
-                    blocksArray.filter((b: any) => b !== null).length === 3;
+                const isFreshTurn = serverMoveCount === 0 &&
+                    serverBlocks.every(b => b !== null);
 
                 // Phase 36: Absolute Guard (Strong Authority Protection)
-                // Only skip sync if I am mid-turn AND actively placing blocks
                 const localPlacedCount = gameStore.placedFlags.filter(f => f).length;
-                const isActivelyPlaying = isMyTurn && !isFreshTurn &&
-                    (state.isProcessingPlacement || localPlacedCount > 0);
+                // CRITICAL: If we are in the middle of a local move (localPlacedCount > serverMoveCount),
+                // we must protect our optimistic state even if the server thinks it's a "Fresh Turn" (echo lag).
+                const isActivelyPlaying = isMyTurn &&
+                    (state.isProcessingPlacement || localPlacedCount > serverMoveCount);
 
                 let shouldSyncData = false;
 
-                if (isFreshTurn) {
-                    // ALWAYS sync on fresh turn (clears stale isProcessingPlacement)
+                if (turnChanged) {
+                    // ALWAYS sync on turn UID change to avoid stale UI
                     shouldSyncData = true;
-                    if (state.isProcessingPlacement) {
-                        console.log("[PvP/Guard] Clearing stale isProcessingPlacement lock on turn transition.");
-                        set({ isProcessingPlacement: false });
+                } else if (isFreshTurn) {
+                    // Sync on fresh turn start (unless we ALREADY made a move locally)
+                    shouldSyncData = !isActivelyPlaying;
+                    if (isActivelyPlaying) {
+                        console.log("[PvP/Guard] Sync suppressed during Fresh Turn: Local move already in progress.");
                     }
                 } else if (!isMyTurn) {
                     shouldSyncData = true;
@@ -187,29 +217,27 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
                 }
 
                 // Sync board and blocks (only when safe to do so)
-                const incomingBlocks = blocksArray as BlockShape[];
+                const incomingBlocks = serverBlocks;
                 const incomingCount = incomingBlocks.filter(b => b !== null).length;
 
                 if (shouldSyncData && incomingCount > 0 && incomingCount <= 3) {
-                    if (blocksArray.length === 3) {
-                        gameStore.setBlocks(blocksArray as BlockShape[]);
-                    }
+                    // CRITICAL: Ensure gameStore and sharedBoard use the SAME object reference to avoid mismatch
                     gameStore.setBoard(serverBoard);
+                    if (incomingBlocks.length === 3) {
+                        gameStore.setBlocks(incomingBlocks as BlockShape[]);
+                    }
 
                     set({
                         sharedBoard: serverBoard,
                         currentBlocks: incomingBlocks,
                         pendingMoveCount: serverMoveCount
                     });
-                    console.log(`[PvP/Sync] Store synced with Server (Blocks: ${incomingCount}, Turn: ${roomData.currentTurn}, Fresh: ${isFreshTurn})`);
-                } else if (shouldSyncData && incomingCount === 0) {
-                    console.log(`[PvP/Sync] Blocked sync due to empty blocks from server.`);
+                    console.log(`[PvP/Sync] Store synced with Server (Count: ${incomingCount}, Turn: ${serverTurnUid}, Fresh: ${isFreshTurn})`);
                 }
 
-                // CRITICAL: Always trust server status. Never downgrade 'playing' → 'matching'
-                // based on block count (blocks naturally become null during intermediate moves)
+                // CRITICAL: Always trust server status.
                 set({
-                    currentTurn: roomData.currentTurn || null,
+                    currentTurn: serverTurnUid,
                     placedCount: serverMoveCount,
                     turnStartTime: roomData.turnStartTime || null,
                     status: roomData.status,
@@ -218,32 +246,52 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
 
                 // Check for local defeat (No moves at start of turn)
                 if (isMyTurn && !state.isGameOver && roomData.status === 'playing') {
-                    const usableBlocks = blocksArray.filter(b => b !== null) as BlockShape[];
+                    const usableBlocks = serverBlocks.filter(b => b !== null) as BlockShape[];
                     const canMove = usableBlocks.some(b => hasAnyValidPlacement(serverBoard, b));
                     if (!canMove && usableBlocks.length > 0) {
                         console.log("[Store] Stuck detected. Reporting defeat...");
-                        get().reportDefeat();
+
+                        const myUid = user.uid || "";
+                        const opponentUid = roomData.player1.uid === myUid ? (roomData.player2?.uid || "") : roomData.player1.uid;
+
+                        if (opponentUid) {
+                            LobbyService.reportGameOver(id, myUid, opponentUid).then(success => {
+                                if (success) {
+                                    console.log("[PvP/GameOver] Defeat synced with RTDB via listener.");
+                                    set({ status: 'finished', isGameOver: true, winner: opponentUid });
+                                }
+                            });
+                        }
                     }
                 }
             }
 
             // 3. Handle Game Completion
-            if (roomData.isFinished && roomData.winner && !state.isGameOver) {
+            if (roomData.status === 'finished' && roomData.winner && !state.isGameOver) {
                 const isWin = roomData.winner === user.uid;
-                const delta = state.calculateRatingChange(isWin);
-                const newRating = state.rating + delta;
+                const isRankedMatch = !!roomData.isRanked; // Authority from server
+
+                let delta = 0;
+                let newRating = state.rating;
+
+                if (isRankedMatch) {
+                    delta = state.calculateRatingChange(isWin);
+                    newRating = state.rating + delta;
+                }
 
                 set({
                     isGameOver: true,
-                    winner: isWin ? state.myPlayerNumber : (state.myPlayerNumber === 1 ? 2 : 1),
+                    winner: roomData.winner,
                     status: 'finished',
-                    ratingChange: delta,
-                    rating: newRating
+                    ratingChange: isRankedMatch ? delta : null,
+                    rating: newRating,
+                    isRanked: isRankedMatch
                 });
 
-                if (isWin && user.uid) {
-                    apiService.updateUserData(user.uid, { rating: newRating }).catch(console.error);
-                }
+                // Phase 42: Rating is now calculated server-side by Cloud Functions.
+                // calculateRatingChange is kept for provisional UI display only.
+                // Do NOT call useUserStore.updateRating() here.
+                console.log(`[PvP/Rating] Game finished. Delta (UI only): ${delta}. Server will update rating.`);
             }
         });
 
@@ -272,6 +320,11 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
             if (state._unsubscribeRoom) state._unsubscribeRoom();
 
             const unsub = LobbyService.subscribeToRoom(id, (roomData: RoomData) => {
+                set({
+                    player1: roomData.player1,
+                    player2: roomData.player2 || null,
+                    isRanked: !!roomData.isRanked
+                });
                 const state = get();
                 const user = useUserStore.getState();
 
@@ -290,29 +343,47 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
                     // Phase 27/29: Guest-side Guard & Turn Sync
                     const currentUid = (user.uid || "").trim();
                     const serverTurnUid = (roomData.currentTurn || "").trim();
-                    const isMyTurn = currentUid === serverTurnUid;
 
+                    if (!serverTurnUid && roomData.status === 'playing') return;
+
+                    const isMyTurn = currentUid === serverTurnUid;
                     gameStore.setIsMyTurn(isMyTurn);
 
-                    // Reconciliation Logic
+                    // Reconciliation Logic (Moved up)
                     const serverMoveCount = roomData.placedCount || 0;
                     const serverBoard = normalizeBoard(roomData.board);
+                    const serverBlocks = normalizeBlocks(roomData.currentBlocks);
+
+                    // Phase 38: Robust Turn Change Detection
+                    const prevTurnUid = state.currentTurn;
+                    const turnChanged = prevTurnUid !== null && prevTurnUid !== serverTurnUid;
+
+                    if (turnChanged) {
+                        console.log(`[PvP/Turn/Guest] Turn transition detected: ${prevTurnUid} -> ${serverTurnUid}`);
+                        set({
+                            pendingMoveCount: 0,
+                            isProcessingPlacement: false,
+                            lastOptimisticMoveTime: 0
+                        });
+                        gameStore.resetTurnState(serverBlocks);
+                    }
 
                     // Phase 37: Turn-Transition-Aware Guard
-                    const isFreshTurn = serverMoveCount === 0 && blocksArray.length === 3 &&
-                        blocksArray.filter((b: any) => b !== null).length === 3;
+                    const isFreshTurn = serverMoveCount === 0 &&
+                        serverBlocks.every(b => b !== null);
 
                     const localPlacedCount = gameStore.placedFlags.filter(f => f).length;
-                    const isActivelyPlaying = isMyTurn && !isFreshTurn &&
-                        (state.isProcessingPlacement || localPlacedCount > 0);
+                    const isActivelyPlaying = isMyTurn &&
+                        (state.isProcessingPlacement || localPlacedCount > serverMoveCount);
 
                     let shouldSyncData = false;
 
-                    if (isFreshTurn) {
+                    if (turnChanged) {
                         shouldSyncData = true;
-                        if (state.isProcessingPlacement) {
-                            console.log("[PvP/Guard/Guest] Clearing stale isProcessingPlacement lock on turn transition.");
-                            set({ isProcessingPlacement: false });
+                    } else if (isFreshTurn) {
+                        shouldSyncData = !isActivelyPlaying;
+                        if (isActivelyPlaying) {
+                            console.log("[PvP/Guard/Guest] Sync suppressed during Fresh Turn: Local move already in progress.");
                         }
                     } else if (!isMyTurn) {
                         shouldSyncData = true;
@@ -330,28 +401,30 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
                     }
 
                     // Block sync guard
-                    const incomingBlocks = blocksArray as BlockShape[];
+                    const incomingBlocks = serverBlocks;
                     const incomingCount = incomingBlocks.filter(b => b !== null).length;
 
                     if (shouldSyncData && incomingCount > 0 && incomingCount <= 3) {
-                        if (blocksArray.length === 3) {
-                            gameStore.setBlocks(blocksArray as BlockShape[]);
-                        }
                         gameStore.setBoard(serverBoard);
-                        const syncUpdate: any = { pendingMoveCount: serverMoveCount };
+                        if (incomingBlocks.length === 3) {
+                            gameStore.setBlocks(incomingBlocks as BlockShape[]);
+                        }
+
+                        const syncUpdate: any = {
+                            sharedBoard: serverBoard,
+                            currentBlocks: incomingBlocks,
+                            pendingMoveCount: serverMoveCount
+                        };
                         if (get().pendingMoveCount === 0) {
                             syncUpdate.lastOptimisticMoveTime = 0;
                         }
                         set(syncUpdate);
                         console.log(`[PvP/Sync/Guest] Store synced (Count: ${incomingCount}, Fresh: ${isFreshTurn})`);
                     }
-                    else if (shouldSyncData && incomingCount === 0) {
-                        console.log(`[PvP/Sync/Guest] Ignored empty blocks from server.`);
-                    }
 
-                    // CRITICAL: Always trust server status. Never downgrade based on block count.
+                    // CRITICAL: Always trust server status.
                     set({
-                        currentTurn: roomData.currentTurn || null,
+                        currentTurn: serverTurnUid,
                         placedCount: serverMoveCount,
                         turnStartTime: roomData.turnStartTime || null,
                         opponentRating: roomData.player1.rate,
@@ -370,20 +443,28 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
 
                 if (roomData.isFinished && roomData.winner && !state.isGameOver) {
                     const isWin = roomData.winner === user.uid;
-                    const delta = state.calculateRatingChange(isWin);
-                    const newRating = state.rating + delta;
+                    const isRankedMatch = !!roomData.isRanked;
+
+                    let delta = 0;
+                    let newRating = state.rating;
+
+                    if (isRankedMatch) {
+                        delta = state.calculateRatingChange(isWin);
+                        newRating = state.rating + delta;
+                    }
 
                     set({
                         isGameOver: true,
-                        winner: isWin ? state.myPlayerNumber : (state.myPlayerNumber === 1 ? 2 : 1),
+                        winner: roomData.winner,
                         status: 'finished',
-                        ratingChange: delta,
-                        rating: newRating
+                        ratingChange: isRankedMatch ? delta : null,
+                        rating: newRating,
+                        isRanked: isRankedMatch
                     });
 
-                    if (isWin && user.uid) {
-                        apiService.updateUserData(user.uid, { rating: newRating }).catch(console.error);
-                    }
+                    // Phase 42: Rating is now calculated server-side by Cloud Functions.
+                    // Do NOT call useUserStore.updateRating() here.
+                    console.log(`[PvP/Rating/Guest] Game finished. Delta (UI only): ${delta}. Server will update rating.`);
                 }
             });
 
@@ -416,7 +497,7 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
                 set({ isMatching: false });
             }
         } else {
-            await get().createRoom(false);
+            await get().createRoom(false, true);
         }
     },
 
@@ -449,7 +530,10 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
             return;
         }
 
-        // --- Phase 21: Optimistic Update ---
+        // --- PHASE 40: Hardened Placement Lock ---
+        // Setting this before ANY other state change ensures observers are locked out immediately.
+        set({ isProcessingPlacement: true });
+
         console.log(`[PvP/Optimistic] Placing block ${index} locally...`);
         const gameStore = useGameStore.getState();
 
@@ -468,7 +552,7 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
         const { newBoard: boardAfterClear } = clearLines(newBoard);
 
         // 5. Update local sharedBoard reference (Optimistic)
-        set({ sharedBoard: boardAfterClear, preview: null, isProcessingPlacement: true });
+        set({ sharedBoard: boardAfterClear, preview: null });
 
         // 4. Fire-and-forget Firebase move (Background)
         LobbyService.makeMove(
@@ -480,13 +564,38 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
             boardAfterClear
         ).then(success => {
             if (!success) {
-                console.error("[PvP/Sync] makeMove failed. Reconciliation will rollback if needed.");
+                console.error("[PvP/Sync] makeMove failed. Triggering reconciliation.");
             }
         }).catch(err => {
             console.error("[PvP/Sync] makeMove threw:", err);
         }).finally(() => {
             // CRITICAL: Always release placement lock, even on error
             set({ isProcessingPlacement: false });
+
+            // Phase 42: Reconciliation — re-fetch server state to fix any desync
+            const currentState = get();
+            if (currentState.roomId && !currentState.isGameOver) {
+                const roomRef = ref(rtdb, `rooms/${currentState.roomId}`);
+                dbGet(roomRef).then(snap => {
+                    if (!snap.exists()) return;
+                    const roomData = snap.val() as RoomData;
+                    const serverBoard = normalizeBoard(roomData.board);
+                    const serverBlocks = normalizeBlocks(roomData.currentBlocks);
+                    const gs = useGameStore.getState();
+
+                    // Only force-sync if we're NOT actively placing (lock already released)
+                    if (!get().isProcessingPlacement) {
+                        gs.setBoard(serverBoard);
+                        if (serverBlocks.filter(b => b !== null).length > 0) {
+                            gs.setBlocks(serverBlocks as BlockShape[]);
+                        }
+                        set({ sharedBoard: serverBoard, currentBlocks: serverBlocks });
+                        console.log("[PvP/Reconciliation] State re-synced from server after makeMove.");
+                    }
+                }).catch(err => {
+                    console.warn("[PvP/Reconciliation] Failed to re-fetch room:", err);
+                });
+            }
         });
     },
 
@@ -602,6 +711,8 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
             matchingLocked: false,
             boardLayout: null,
             preview: null,
+            player1: null,
+            player2: null,
             ratingChange: null,
             isRanked: false,
             _unsubscribeRoom: null,
@@ -618,4 +729,27 @@ export const useOnlinePvPStore = create<OnlinePvPState>((set, get) => ({
     handleDisconnect: () => {
         set({ status: 'finished', isGameOver: true, winner: null, ratingChange: 0 });
     }
-}));
+})));
+
+// Phase 39: Observer for Defeat Reporting (Secondary Guard)
+useGameStore.subscribe(
+    (state) => state.isGameOver,
+    (isGameOver) => {
+        if (isGameOver) {
+            const pvpStore = useOnlinePvPStore.getState();
+            if (pvpStore.roomId && pvpStore.status === 'playing') {
+                const userUid = useUserStore.getState().uid || "";
+                if (pvpStore.currentTurn === userUid) {
+                    // PHASE 40 Guard: If we are already processing a placement, 
+                    // trust that the LobbyService transaction will handle the outcome.
+                    if (pvpStore.isProcessingPlacement) {
+                        console.log("[PvP/GameOver] Suppressing reporting during active placement. Service handles atomicity.");
+                        return;
+                    }
+                    console.log("[PvP/GameOver] Defeat detected via store observer. Reporting...");
+                    pvpStore.reportDefeat();
+                }
+            }
+        }
+    }
+);

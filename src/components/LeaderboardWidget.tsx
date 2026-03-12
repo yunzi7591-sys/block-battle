@@ -11,7 +11,7 @@ type LeaderboardType = 'score' | 'rate';
 type RankingPeriod = 'weekly' | 'monthly';
 
 export function LeaderboardWidget() {
-    const { userName, highScore, rating } = useUserStore();
+    const { userName, highScore, rating, uid } = useUserStore();
     const [type, setType] = useState<LeaderboardType>('score');
     const [period, setPeriod] = useState<RankingPeriod>('weekly');
 
@@ -37,6 +37,7 @@ export function LeaderboardWidget() {
 
         setIsLoading(true);
         setError(null);
+        setData([]); // CRITICAL: Clear existing data before fetching new (Visual & Logic safety)
         try {
             const result = await apiService.fetchLeaderboard(type, period);
             setData(result);
@@ -57,12 +58,13 @@ export function LeaderboardWidget() {
 
     // My Stats (Local state + API rank if found)
     const myStats = useMemo(() => {
-        const found = data.find(item => item.name === userName);
+        // UID is stored as id in LeaderboardEntry
+        const found = data.find(item => item.id === uid);
         return {
             rank: found ? found.rank : '---',
             value: type === 'score' ? highScore : rating
         };
-    }, [data, userName, type, highScore, rating]);
+    }, [data, uid, type, highScore, rating]);
 
     const renderRankIcon = (rank: number) => {
         if (rank === 1) return <Ionicons name="medal" size={20} color="#FFD700" />;

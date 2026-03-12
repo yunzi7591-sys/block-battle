@@ -1,0 +1,22 @@
+{
+  "name": "block-battle-functions",
+  "version": "1.0.0",
+  "description": "Cloud Functions for Block Battle – server-side rating calculation and cheat prevention",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "deploy": "npm run build && firebase deploy --only functions"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^6.3.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.7.0"
+  },
+  "private": true
+}

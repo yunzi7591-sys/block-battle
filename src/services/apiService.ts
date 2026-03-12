@@ -3,6 +3,7 @@ import {
     collection,
     doc,
     setDoc,
+    getDoc,
     query,
     orderBy,
     limit,
@@ -61,7 +62,6 @@ export const apiService = {
 
     /**
      * Fetches top players from Firestore.
-     * Handles missing index errors gracefully by logging the requirement URL.
      */
     fetchLeaderboard: async (type: 'score' | 'rate', period: 'weekly' | 'monthly'): Promise<LeaderboardEntry[]> => {
         console.log(`[Firebase] fetchLeaderboard (type: ${type})`);
@@ -71,8 +71,9 @@ export const apiService = {
 
         try {
             const usersRef = collection(db, "users");
-            // We order by the target field descending
-            const q = query(usersRef, orderBy(field, "desc"), limit(10));
+            // We order by the target field descending. 
+            // NOTE: This requires a Firestore index for 'highScore' and 'rating'.
+            const q = query(usersRef, orderBy(field, "desc"), limit(20));
 
             const querySnapshot = await getDocs(q);
             const data: LeaderboardEntry[] = [];
@@ -80,9 +81,12 @@ export const apiService = {
             let rank = 1;
             querySnapshot.forEach((doc) => {
                 const userData = doc.data();
+                // Phase 42: Strict Mapping (Primary: 'name', Fallback: 'displayName')
+                const nameDisplay = userData.name || userData.displayName || 'Unknown';
+
                 data.push({
                     id: doc.id,
-                    name: userData.name || 'Unknown',
+                    name: nameDisplay,
                     value: userData[field] || 0,
                     rank: rank++
                 });
@@ -90,12 +94,31 @@ export const apiService = {
 
             return data;
         } catch (error: any) {
-            if (error.code === 'failed-precondition') {
-                console.error('[Firebase] INDEX MISSING! Please create index here:', error.message);
-            } else {
-                console.error('[Firebase] Query Error:', error);
+            console.error('[Firebase] fetchLeaderboard Error:', error);
+            throw new Error('Could not load rankings.');
+        }
+    },
+
+    /**
+     * Fetches a single user profile from Firestore.
+     */
+    getUserProfile: async (uid: string): Promise<UserBackendData | null> => {
+        try {
+            const userRef = doc(db, "users", uid);
+            const docSnap = await getDoc(userRef);
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                return {
+                    uid: docSnap.id,
+                    name: data.name || data.displayName || 'Unknown',
+                    highScore: data.highScore || 0,
+                    rating: data.rating || 1500
+                };
             }
-            throw new Error('Could not load rankings. Please try again later.');
+            return null;
+        } catch (e) {
+            console.error('[Firebase] getUserProfile Error:', e);
+            return null;
         }
     },
 
@@ -106,11 +129,15 @@ export const apiService = {
         console.log(`[Firebase] updateUserData for ${uid}:`, data);
         try {
             const userRef = doc(db, "users", uid);
-            await setDoc(userRef, data, { merge: true });
+            // Use setDoc with merge:true to ensure we don't overwrite other fields (like createdAt)
+            await setDoc(userRef, {
+                ...data,
+                updatedAt: new Date().getTime()
+            }, { merge: true });
             return true;
         } catch (error: any) {
             console.error('[Firebase] Update Error:', error);
-            throw new Error('Failed to sync profile with server.');
+            return false;
         }
     }
 };
