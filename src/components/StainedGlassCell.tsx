@@ -5,15 +5,13 @@ import { getJewelGradient } from '../utils/colors';
 
 interface StainedGlassCellProps {
     color: string;
-    size?: number; // Optional for flex-based layout
+    size?: number;
     margin?: number;
     opacity?: number;
     isPreview?: boolean;
     rowIndex?: number;
     colIndex?: number;
 }
-
-
 
 export const StainedGlassCell = React.memo(({
     color,
@@ -39,7 +37,7 @@ export const StainedGlassCell = React.memo(({
                 },
             ]}
         >
-            {/* Layer 1: CATHEDRAL INNER REFRACTION (The "Body") */}
+            {/* Layer 1: Main jewel gradient (the body) */}
             <LinearGradient
                 colors={colors as [string, string, ...string[]]}
                 style={StyleSheet.absoluteFill}
@@ -47,29 +45,7 @@ export const StainedGlassCell = React.memo(({
                 end={{ x: 1, y: 1 }}
             />
 
-            {/* Layer 2: INTERNAL LIGHT PATTERN (Simulates light passing through thick glass) */}
-            <LinearGradient
-                colors={['transparent', 'rgba(255,255,255,0.08)', 'transparent']}
-                style={StyleSheet.absoluteFill}
-                start={{ x: 0.3, y: 0 }}
-                end={{ x: 0.7, y: 1 }}
-            />
-
-            {/* Layer 3: HEAVY LEAD FRAME (Artisan Metal) */}
-            <View style={styles.leadFrame} />
-
-            {/* Layer 4: SURFACE HIGHLIGHTS & BEVELS */}
-            <LinearGradient
-                colors={['rgba(255,255,255,0.4)', 'rgba(255,255,255,0)', 'rgba(0,0,0,0.2)']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={StyleSheet.absoluteFill}
-            />
-
-            {/* Layer 5: PRECISION CUT CORNER GLOSS */}
-            <View style={styles.cornerHighlight} />
-
-            {/* Layer 6: ARTISAN BEVEL OVERLAY */}
+            {/* Layer 2: Surface bevel + lead frame (combined into single View) */}
             <View style={styles.bevelFrame} />
         </View>
     );
@@ -77,30 +53,17 @@ export const StainedGlassCell = React.memo(({
 
 const styles = StyleSheet.create({
     container: {
-        borderRadius: 2, // Slight rounding for "pressed" glass segments
+        borderRadius: 2,
         overflow: 'hidden',
-    },
-    leadFrame: {
-        ...StyleSheet.absoluteFillObject,
-        borderWidth: 3, // Increased for "Cathedral" weight
-        borderColor: '#1A1A1A', // Darker, more "leaden"
-        opacity: 0.9,
+        borderWidth: 2.5,
+        borderColor: '#1A1A1A',
     },
     bevelFrame: {
         ...StyleSheet.absoluteFillObject,
-        borderWidth: 1.5,
-        borderColor: 'rgba(255,255,255,0.2)',
-        margin: 3, // Sits inside the lead frame
-    },
-    cornerHighlight: {
-        position: 'absolute',
-        top: 4,
-        left: 4,
-        width: '45%',
-        height: '45%',
-        borderLeftWidth: 2,
-        borderTopWidth: 2,
-        borderColor: 'rgba(255,255,255,0.7)',
-        borderTopLeftRadius: 4,
+        borderWidth: 1,
+        borderTopColor: 'rgba(255,255,255,0.35)',
+        borderLeftColor: 'rgba(255,255,255,0.25)',
+        borderBottomColor: 'rgba(0,0,0,0.3)',
+        borderRightColor: 'rgba(0,0,0,0.2)',
     },
 });

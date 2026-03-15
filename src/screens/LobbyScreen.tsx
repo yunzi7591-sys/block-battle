@@ -145,6 +145,9 @@ export function LobbyScreen({ navigation }: any) {
                             style={styles.backButton}
                             onPress={() => navigation.goBack()}
                             hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Back"
+                            accessibilityHint="Returns to the previous screen"
                         >
                             <Ionicons name="chevron-back" size={24} color="#FFFFFF" />
                             <Text style={styles.backText}>BACK</Text>
@@ -154,7 +157,7 @@ export function LobbyScreen({ navigation }: any) {
 
                 {/* Central Stack: Title & Stats */}
                 <View style={styles.titleStack}>
-                    <Text style={styles.headerTitle}>MATCHING LOBBY</Text>
+                    <Text style={styles.headerTitle} accessibilityRole="header">MATCHING LOBBY</Text>
 
                     {/* Player Status Badge */}
                     <View style={styles.statsBadgeContainer}>
@@ -179,7 +182,13 @@ export function LobbyScreen({ navigation }: any) {
                 {!roomId ? (
                     <View style={styles.mainContent}>
                         {/* RANDOM MATCH (PREMIUM BUTTON) */}
-                        <TouchableOpacity style={styles.randomMatchBtn} onPress={handleAutoMatch}>
+                        <TouchableOpacity
+                            style={styles.randomMatchBtn}
+                            onPress={handleAutoMatch}
+                            accessibilityRole="button"
+                            accessibilityLabel="Random Match"
+                            accessibilityHint="Starts searching for a random online opponent"
+                        >
                             <BlurView intensity={60} tint="light" style={styles.randomMatchBlur}>
                                 <Text style={styles.randomTitle}>RANDOM MATCH</Text>
                                 <Text style={styles.randomSub}>BATTLE ANYONE ONLINE</Text>
@@ -195,7 +204,13 @@ export function LobbyScreen({ navigation }: any) {
 
                         {/* PRIVATE MATCH SECTION */}
                         <View style={styles.privateContainer}>
-                            <TouchableOpacity style={styles.privateMiniBtn} onPress={handleCreatePrivate}>
+                            <TouchableOpacity
+                                style={styles.privateMiniBtn}
+                                onPress={handleCreatePrivate}
+                                accessibilityRole="button"
+                                accessibilityLabel="Create Private Room"
+                                accessibilityHint="Creates a private room for playing with friends"
+                            >
                                 <BlurView intensity={30} tint="light" style={styles.miniBlur}>
                                     <Text style={styles.miniBtnText}>CREATE PRIVATE</Text>
                                 </BlurView>
@@ -210,8 +225,16 @@ export function LobbyScreen({ navigation }: any) {
                                     maxLength={4}
                                     value={joinId}
                                     onChangeText={setJoinId}
+                                    accessibilityLabel="Room code"
+                                    accessibilityHint="Enter a 4-digit room code to join a private match"
                                 />
-                                <TouchableOpacity style={styles.miniJoinBtn} onPress={handleJoinPrivate}>
+                                <TouchableOpacity
+                                    style={styles.miniJoinBtn}
+                                    onPress={handleJoinPrivate}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Join Room"
+                                    accessibilityHint="Joins the private room with the entered code"
+                                >
                                     <Text style={styles.miniJoinText}>JOIN</Text>
                                 </TouchableOpacity>
                             </BlurView>
@@ -226,15 +249,27 @@ export function LobbyScreen({ navigation }: any) {
                                     <Text style={styles.roomCode}>{roomId}</Text>
                                 </>
                             )}
-                            <Text style={styles.statusText}>
+                            <Text style={styles.statusText} accessibilityRole="text" accessibilityLabel={isHost ? "Waiting for guest to join" : "Connected to host"}>
                                 {isHost ? "WAITING FOR GUEST..." : "CONNECTED TO HOST"}
                             </Text>
                             {isHost && (
-                                <TouchableOpacity style={styles.startBtn} onPress={handleStart}>
+                                <TouchableOpacity
+                                    style={styles.startBtn}
+                                    onPress={handleStart}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Start Battle"
+                                    accessibilityHint="Begins the PvP match"
+                                >
                                     <Text style={styles.startBtnText}>START BATTLE</Text>
                                 </TouchableOpacity>
                             )}
-                            <TouchableOpacity style={styles.backBtn} onPress={handleCancelMatch}>
+                            <TouchableOpacity
+                                style={styles.backBtn}
+                                onPress={handleCancelMatch}
+                                accessibilityRole="button"
+                                accessibilityLabel="Cancel"
+                                accessibilityHint="Cancels the current match or room"
+                            >
                                 <Text style={styles.backBtnText}>CANCEL</Text>
                             </TouchableOpacity>
                         </BlurView>
@@ -253,14 +288,20 @@ export function LobbyScreen({ navigation }: any) {
                                     <View style={styles.pulseDisk} />
                                 </View>
                                 {!matchingLocked && (
-                                    <TouchableOpacity style={styles.cancelSearchBtn} onPress={handleCancelMatch}>
+                                    <TouchableOpacity
+                                        style={styles.cancelSearchBtn}
+                                        onPress={handleCancelMatch}
+                                        accessibilityRole="button"
+                                        accessibilityLabel="Cancel Search"
+                                        accessibilityHint="Stops searching for an opponent"
+                                    >
                                         <Text style={styles.cancelSearchText}>CANCEL</Text>
                                     </TouchableOpacity>
                                 )}
                             </>
                         ) : (
                             <>
-                                <Text style={styles.foundText}>MATCH FOUND!</Text>
+                                <Text style={styles.foundText} accessibilityRole="text" accessibilityLabel="Match found">MATCH FOUND!</Text>
                                 <View style={styles.countdownContainer}>
                                     <Text style={styles.countdownNumber}>{countdown}</Text>
                                     <Text style={styles.getReadyText}>GET READY</Text>

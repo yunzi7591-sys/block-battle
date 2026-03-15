@@ -31,18 +31,23 @@ export function TitleScreen({ navigation }: any) {
     };
 
     return (
-        <TouchableWithoutFeedback onPress={handleStart}>
+        <TouchableWithoutFeedback
+            onPress={handleStart}
+            accessibilityRole="button"
+            accessibilityLabel="Tap to start Block Battle"
+            accessibilityHint="Starts the game and navigates to the home screen"
+        >
             <View style={styles.container}>
                 <CathedralBackground />
 
                 <View style={styles.content}>
-                    <Text style={styles.logoText}>BLOCK{"\n"}BATTLE</Text>
-                    <Text style={styles.subtext}>MASTERPIECE EDITION</Text>
+                    <Text style={styles.logoText} accessibilityRole="header">BLOCK{"\n"}BATTLE</Text>
+                    <Text style={styles.subtext} accessibilityRole="text">MASTERPIECE EDITION</Text>
 
                     <View style={styles.spacer} />
 
                     <Animated.View style={{ opacity: fadeAnim }}>
-                        <Text style={styles.tapText}>TAP TO START</Text>
+                        <Text style={styles.tapText} accessibilityRole="text">TAP TO START</Text>
                     </Animated.View>
                 </View>
             </View>

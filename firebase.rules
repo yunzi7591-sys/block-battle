@@ -1,0 +1,83 @@
+{
+  "rules": {
+    "rooms": {
+      "$roomId": {
+        // Read: authenticated users only
+        ".read": "auth != null",
+
+        // Write: only the room's player1 or player2 can modify
+        ".write": "auth != null && (
+          (data.child('player1/uid').val() === auth.uid) ||
+          (data.child('player2/uid').val() === auth.uid) ||
+          (!data.exists())
+        )",
+
+        ".validate": "newData.hasChildren(['status', 'player1', 'board', 'currentTurn'])",
+
+        "player1": {
+          ".validate": "newData.hasChildren(['uid', 'name', 'rate'])"
+        },
+        "player2": {
+          // Only allow joining if room is 'waiting' and player2 slot is empty
+          ".validate": "newData.hasChildren(['uid', 'name', 'rate'])"
+        },
+        "status": {
+          ".validate": "newData.val() === 'waiting' || newData.val() === 'playing' || newData.val() === 'finished'"
+        },
+        "board": {
+          ".validate": "newData.hasChildren(['0','1','2','3','4','5','6','7'])"
+        },
+        "currentTurn": {
+          ".validate": "newData.isString()"
+        },
+        "placedCount": {
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 3"
+        },
+        "turnNumber": {
+          ".validate": "newData.isNumber() && newData.val() >= 1"
+        },
+        "turnDuration": {
+          ".validate": "newData.isNumber() && newData.val() >= 10000 && newData.val() <= 120000"
+        },
+        "winner": {
+          // Cheat prevention: once written, cannot be overwritten
+          ".write": "!data.exists()",
+          ".validate": "newData.isString()"
+        },
+        "loser": {
+          // Cheat prevention: once written, cannot be overwritten
+          ".write": "!data.exists()",
+          ".validate": "newData.isString()"
+        },
+        "isFinished": {
+          ".validate": "newData.isBoolean()"
+        },
+        "isRanked": {
+          ".validate": "newData.isBoolean()"
+        },
+        "isPrivate": {
+          ".validate": "newData.isBoolean()"
+        }
+      }
+    },
+
+    // Leaderboard: read-only for clients (Cloud Functions manage writes)
+    "leaderboard": {
+      ".read": "auth != null",
+      ".write": false
+    },
+
+    // User profiles: read by any authenticated user, write only own data
+    "users": {
+      "$uid": {
+        ".read": "auth != null",
+        ".write": "auth.uid === $uid"
+      }
+    },
+
+    // Server time offset
+    ".info": {
+      ".read": true
+    }
+  }
+}

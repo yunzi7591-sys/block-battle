@@ -2,18 +2,16 @@
 export const BOARD_CELL_MARGIN = 2;
 export const BOARD_PADDING = 8;
 export const TRAY_CELL_SIZE = 18;
-export const CLEAR_ANIMATION_MS = 350;
+export const CLEAR_ANIMATION_MS = 250;
 
-// ─── Drag & Drop: 3-Layer Y-Axis Architecture ────────────
+// ─── Drag & Drop: Unified Accelerated Model ──────────────
 //
-//  Touch Y (raw finger)       ← baseline
-//  Preview Y = Touch - 40px   ← hit-test / grid snap (just above fingertip)
-//  Visual Y  = Touch - 120px  ← rendered block (well above finger for visibility)
-//
-//  X axis: 1:1 tracking, no acceleration.
+//  Acceleration: 1.5x on both axes (reduces finger travel)
+//  LIFT_OFFSET:  Block floats above finger for visibility
+//  Single coordinate set used for BOTH rendering and hit-test
 //
 
-/** Y offset from finger to PREVIEW (hit-test) anchor. Negative = upward. */
-export const PREVIEW_Y_OFFSET = -40;
-/** Y offset from finger to VISUAL BLOCK render position. Negative = upward. */
-export const VISUAL_Y_OFFSET = -120;
+/** Drag acceleration multiplier (both axes). */
+export const DRAG_ACCEL = 1.5;
+/** Y offset to lift block above finger during drag. Negative = upward. */
+export const LIFT_OFFSET = -90;

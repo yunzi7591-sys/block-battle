@@ -12,6 +12,8 @@ import { GameScreen } from './src/screens/GameScreen';
 import { LobbyScreen } from './src/screens/LobbyScreen';
 import { PvPGameScreen } from './src/screens/PvPGameScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
+import { ErrorBoundary } from './src/components/ErrorBoundary';
+import { Toast } from './src/components/Toast';
 
 const Stack = createStackNavigator();
 
@@ -33,8 +35,9 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
-      <NavigationContainer>
+      <ErrorBoundary>
+        <StatusBar style="light" />
+        <NavigationContainer>
         <Stack.Navigator
           initialRouteName="Title"
           screenOptions={{
@@ -50,6 +53,8 @@ export default function App() {
           <Stack.Screen name="Profile" component={ProfileScreen} />
         </Stack.Navigator>
       </NavigationContainer>
+        <Toast />
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }

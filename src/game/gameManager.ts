@@ -61,7 +61,7 @@ export function checkAndRefill(state: GameState): GameState {
     if (!allPlaced) return state;
 
     // Refill
-    const newBlocks = generateBlocks(state.board);
+    const newBlocks = generateBlocks(state.board, 0, 0, undefined, state.score);
     return {
         ...state,
         currentBlocks: newBlocks,

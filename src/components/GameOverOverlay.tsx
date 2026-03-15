@@ -246,23 +246,31 @@ export function GameOverOverlay({
                 </Animated.View>
 
                 {/* Result title */}
-                <Animated.Text style={[styles.resultTitle, { color: resultColor }, titleStyle]}>
+                <Animated.Text
+                    style={[styles.resultTitle, { color: resultColor }, titleStyle]}
+                    accessibilityRole="header"
+                    accessibilityLabel={isWin ? 'Victory' : 'Defeat'}
+                >
                     {isWin ? 'VICTORY' : 'DEFEAT'}
                 </Animated.Text>
 
                 {/* Username */}
-                <Animated.Text style={[styles.userName, nameStyle]}>
+                <Animated.Text style={[styles.userName, nameStyle]} accessibilityRole="text" accessibilityLabel={`Player: ${userName}`}>
                     {userName}
                 </Animated.Text>
 
                 {/* Rating change */}
                 {isRanked && ratingChange !== null && (
                     <Animated.View style={[styles.ratingContainer, ratingContainerStyle]}>
-                        <Text style={styles.ratingLabel}>RANKED MATCH RESULT</Text>
+                        <Text style={styles.ratingLabel} accessibilityRole="text">RANKED MATCH RESULT</Text>
                         <View style={styles.ratingRow}>
                             <AnimatedRatingCounter from={oldRating} to={newRating} />
                             <Animated.View style={deltaStyle}>
-                                <Text style={[styles.deltaText, { color: deltaColor }]}>
+                                <Text
+                                    style={[styles.deltaText, { color: deltaColor }]}
+                                    accessibilityRole="text"
+                                    accessibilityLabel={`Rating change: ${ratingChange >= 0 ? 'plus' : 'minus'} ${Math.abs(ratingChange)}`}
+                                >
                                     ({ratingChange >= 0 ? `+${ratingChange}` : ratingChange})
                                 </Text>
                             </Animated.View>
@@ -278,7 +286,13 @@ export function GameOverOverlay({
 
                 {/* Exit button */}
                 <Animated.View style={buttonStyle}>
-                    <AnimatedPressable style={styles.exitBtn} onPress={onExit}>
+                    <AnimatedPressable
+                        style={styles.exitBtn}
+                        onPress={onExit}
+                        accessibilityRole="button"
+                        accessibilityLabel="Return to Menu"
+                        accessibilityHint="Returns to the home screen"
+                    >
                         <Text style={styles.exitBtnText}>RETURN TO MENU</Text>
                     </AnimatedPressable>
                 </Animated.View>

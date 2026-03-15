@@ -51,6 +51,7 @@ export interface RoomData {
     currentTurn: string; // UID
     currentBlocks: (BlockShape | null)[];
     placedCount: number; // 0, 1, 2
+    turnNumber: number; // 1-based cumulative turn counter (both players combined)
     turnStartTime: any; // Server Timestamp
     turnDuration: number; // 30000ms
     gameStartTime?: any; // Server Timestamp — cheat detection (Cloud Functions)
@@ -147,6 +148,7 @@ export const LobbyService = {
             currentTurn: player1.uid,
             currentBlocks: initialBlocks,
             placedCount: 0,
+            turnNumber: 1,
             turnStartTime: serverTimestamp(),
             turnDuration: 30000
         };
@@ -200,99 +202,80 @@ export const LobbyService = {
     },
 
     /**
-     * Atomically executes a move and handles turn turnover.
-     * Optimized: Use 'update' for moves 1-2, and 'runTransaction' for move 3 (turn switch).
+     * Atomically executes a move via runTransaction.
+     * All moves (intermediate + turn switch) use transaction for race-condition safety.
+     * DFS (generatePvPBlocks) is NEVER called inside the transaction callback.
+     * Pre-generated blocks for the next turn are passed via newBlocksForNextTurn.
      */
-    makeMove: async (roomId: string, uid: string, index: number, row: number, col: number, nextBoard: Board): Promise<boolean> => {
+    makeMove: async (
+        roomId: string,
+        uid: string,
+        index: number,
+        row: number,
+        col: number,
+        nextBoard: Board,
+        newBlocksForNextTurn?: BlockShape[]
+    ): Promise<boolean> => {
         const roomRef = ref(rtdb, `rooms/${roomId}`);
 
         try {
-            // 1. Fetch current status to decide between 'update' (fast) and 'transaction' (safe switch)
-            const snapshot = await get(roomRef);
-            if (!snapshot.exists()) return false;
-            const currentData = snapshot.val() as RoomData;
+            const result = await runTransaction(roomRef, (data: RoomData | null) => {
+                if (!data) return;
+                if (data.currentTurn !== uid || data.isFinished) return;
 
-            // Basic Guards
-            if (currentData.currentTurn !== uid || currentData.isFinished) return false;
+                // 1. Normalize & validate
+                data.currentBlocks = normalizeBlocks(data.currentBlocks);
+                if (!data.currentBlocks[index]) return; // Already placed (race guard)
 
-            // CRITICAL: Normalize sparse Firebase object into proper 3-element array
-            const blocks = normalizeBlocks(currentData.currentBlocks);
-            if (!blocks[index]) {
-                console.warn(`[Lobby/Move] Block at index ${index} is null/undefined. Aborting.`);
-                return false;
-            }
+                // 2. Apply move: board + null out placed block
+                data.board = nextBoard;
+                data.currentBlocks[index] = null;
 
-            const nextPlacedCount = (currentData.placedCount || 0) + 1;
-            const nextBlocks = [...blocks];
-            nextBlocks[index] = null;
+                // 3. Determine turn state
+                const nextPlacedCount = (data.placedCount || 0) + 1;
+                const remainingBlocks = data.currentBlocks.filter((b): b is BlockShape => b != null);
+                const canProceed = remainingBlocks.some(b => hasAnyValidPlacement(data.board, b));
+                const isTurnEnding = nextPlacedCount >= 3 || !canProceed;
 
-            const remainingBlocks = nextBlocks.filter((b): b is BlockShape => b != null);
-            const canProceed = remainingBlocks.some(b => hasAnyValidPlacement(nextBoard, b));
-            const isTurnEnding = nextPlacedCount >= 3 || !canProceed;
-
-            if (!isTurnEnding) {
-                // PHASE 36 OPTIMIZATION: Use 'update' for intermediate moves (Low Latency)
-                console.log(`[Lobby/Move] Intermediate move (${nextPlacedCount}/3). Using fast update.`);
-                const updates: any = {};
-                updates[`board`] = nextBoard;
-                updates[`currentBlocks/${index}`] = null;
-                updates[`placedCount`] = nextPlacedCount;
-                updates[`lastMove`] = { uid, index, row, col, timestamp: Date.now() };
-
-                await update(roomRef, updates);
-                return true;
-            } else {
-                // PHASE 36: Use 'runTransaction' for Turn Switch (Atomic Consistency)
-                console.log(`[Lobby/Move] Final move (${nextPlacedCount}/3) or No Moves Left. Using transaction to switch turns.`);
-                const result = await runTransaction(roomRef, (data: RoomData | null) => {
-                    if (!data) return;
-                    if (data.currentTurn !== uid || data.isFinished) return;
-
-                    data.board = nextBoard;
-
-                    // CRITICAL: Normalize sparse Firebase blocks before mutation
-                    data.currentBlocks = normalizeBlocks(data.currentBlocks);
-                    data.currentBlocks[index] = null;
-
-                    // PHASE 40: Atomic Stalemate Detection (Case 1: Mid-turn stuck)
-                    const remainingBlocks = data.currentBlocks.filter((b): b is BlockShape => b != null);
-                    const canContinue = remainingBlocks.some(b => hasAnyValidPlacement(data.board, b));
-                    const isThreePlaced = (data.placedCount || 0) + 1 >= 3;
-
-                    if (!isThreePlaced && !canContinue) {
-                        console.log(`[Lobby/Atomic] Stalemate detected for player ${uid}. Wrapping game.`);
-                        data.status = 'finished';
-                        data.isFinished = true;
-                        // Winner is the EXCEPTING player (the one who is NOT the current player who just got stuck)
-                        data.winner = data.player1.uid === uid ? (data.player2?.uid || "") : data.player1.uid;
-                        data.loser = uid;
-                        return data;
-                    }
-
-                    data.placedCount = 0; // Reset for next turn
+                // ─── 中間配置: ターン継続 ─────────────────────
+                if (!isTurnEnding) {
+                    data.placedCount = nextPlacedCount;
                     data.lastMove = { uid, index, row, col, timestamp: Date.now() };
-
-                    // Turn Switch Logic
-                    const player1Uid = data.player1.uid;
-                    const player2Uid = data.player2?.uid || "";
-                    const nextTurnUid = data.currentTurn === player1Uid ? player2Uid : player1Uid;
-
-                    console.log(`[Lobby/Turn] Switching from ${data.currentTurn} to ${nextTurnUid}`);
-                    data.currentTurn = nextTurnUid;
-
-                    // Generate new blocks for next turn (guaranteed proper 3-element array)
-                    const newBlocks = generatePvPBlocks(data.board);
-                    if (!newBlocks || newBlocks.length !== 3) {
-                        console.error(`[Lobby/Turn] generatePvPBlocks returned invalid result: ${JSON.stringify(newBlocks)}`);
-                        return; // Abort transaction
-                    }
-                    data.currentBlocks = newBlocks;
-                    data.turnStartTime = serverTimestamp();
-
                     return data;
-                });
-                return result.committed;
-            }
+                }
+
+                // ─── Mid-turn Stalemate: 残りブロック配置不可 → ゲーム終了 ───
+                if (nextPlacedCount < 3 && !canProceed) {
+                    data.status = 'finished';
+                    data.isFinished = true;
+                    data.winner = data.player1.uid === uid ? (data.player2?.uid || "") : data.player1.uid;
+                    data.loser = uid;
+                    data.lastMove = { uid, index, row, col, timestamp: Date.now() };
+                    // Stalemate — ブロック生成不要。Abort しない。
+                    return data;
+                }
+
+                // ─── 正常ターン切替: 3ブロック配置完了 ────────────
+                // 【厳守】newBlocksForNextTurn 必須。無ければ Abort。
+                if (!newBlocksForNextTurn || newBlocksForNextTurn.length !== 3) {
+                    console.error(`[Lobby/Turn] newBlocksForNextTurn missing or invalid. Aborting transaction.`);
+                    return; // Abort — クライアント側の再試行を待つ
+                }
+
+                data.placedCount = 0;
+                data.lastMove = { uid, index, row, col, timestamp: Date.now() };
+
+                const player1Uid = data.player1.uid;
+                const player2Uid = data.player2?.uid || "";
+                data.currentTurn = data.currentTurn === player1Uid ? player2Uid : player1Uid;
+
+                data.turnNumber = (data.turnNumber || 1) + 1;
+                data.currentBlocks = newBlocksForNextTurn;
+                data.turnStartTime = serverTimestamp();
+
+                return data;
+            });
+            return result.committed;
         } catch (error) {
             console.error('[RTDB] makeMove error:', error);
             return false;
@@ -380,7 +363,7 @@ export const LobbyService = {
 
             // 3. ATOMIC UPDATE: Write everything in one network trip
             const initialBoard = Array.from({ length: 8 }, () => Array(8).fill(0));
-            const initialBlocks = generatePvPBlocks(initialBoard);
+            const initialBlocks = generatePvPBlocks(initialBoard, 1);
 
             const updates: Partial<RoomData> = {
                 status: 'playing',
@@ -388,6 +371,7 @@ export const LobbyService = {
                 currentBlocks: initialBlocks,
                 currentTurn: myUid, // Explicitly use my current UID (Host)
                 placedCount: 0,
+                turnNumber: 1,
                 turnStartTime: serverTimestamp(),
                 gameStartTime: serverTimestamp(), // Phase 42: Cheat detection — Cloud Functions validates min duration
             };
@@ -419,11 +403,9 @@ export const LobbyService = {
             const roomIds = Object.keys(rooms);
             console.log(`[RTDB/Find] Found ${roomIds.length} waiting rooms.`);
 
-            // Find the first room that is Public (Self-match filtering REMOVED for testing)
             const validRoomId = roomIds.find(key => {
                 const room = rooms[key];
-                return !room.isPrivate;
-                // && room.player1.uid !== myUid; // REMOVED FOR TESTING
+                return !room.isPrivate && room.player1.uid !== myUid;
             });
 
             if (validRoomId) {

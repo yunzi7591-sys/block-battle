@@ -1,70 +1,61 @@
-import React, { useEffect, useRef } from 'react';
-import { StyleSheet, View, Animated } from 'react-native';
+import React, { useEffect } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
+import ReAnimated, {
+    useSharedValue,
+    useAnimatedStyle,
+    withRepeat,
+    withTiming,
+    Easing,
+    interpolate,
+} from 'react-native-reanimated';
 
 export const CathedralBackground = () => {
-    const anim = useRef(new Animated.Value(0)).current;
+    const progress = useSharedValue(0);
 
     useEffect(() => {
-        Animated.loop(
-            Animated.sequence([
-                Animated.timing(anim, {
-                    toValue: 1,
-                    duration: 8000,
-                    useNativeDriver: false,
-                }),
-                Animated.timing(anim, {
-                    toValue: 0,
-                    duration: 8000,
-                    useNativeDriver: false,
-                }),
-            ])
-        ).start();
-    }, [anim]);
+        progress.value = withRepeat(
+            withTiming(1, { duration: 8000, easing: Easing.inOut(Easing.ease) }),
+            -1,
+            true
+        );
+    }, []);
 
-    const color1 = anim.interpolate({
-        inputRange: [0, 1],
-        outputRange: ['#1A1A2E', '#0F172A'],
-    });
+    const orb1Style = useAnimatedStyle(() => ({
+        opacity: interpolate(progress.value, [0, 1], [0.2, 0.5]),
+        transform: [
+            { scale: interpolate(progress.value, [0, 1], [1, 1.5]) },
+        ],
+    }));
 
-    const color2 = anim.interpolate({
-        inputRange: [0, 1],
-        outputRange: ['#16213E', '#1E3A8A'],
-    });
+    const orb2Style = useAnimatedStyle(() => ({
+        opacity: interpolate(progress.value, [0, 1], [0.3, 0.1]),
+        transform: [
+            { scale: interpolate(progress.value, [0, 1], [1.2, 0.8]) },
+        ],
+    }));
 
     return (
         <View style={StyleSheet.absoluteFill}>
-            <Animated.View style={StyleSheet.absoluteFill}>
-                <LinearGradient
-                    colors={['#0F0F1A', '#1A1A2E', '#0F0F1A']}
-                    style={StyleSheet.absoluteFill}
-                />
-            </Animated.View>
+            <LinearGradient
+                colors={['#0F0F1A', '#1A1A2E', '#0F0F1A']}
+                style={StyleSheet.absoluteFill}
+            />
 
-            {/* Subtle moving light orbs */}
-            <Animated.View
+            {/* Subtle moving light orbs — now on UI thread */}
+            <ReAnimated.View
                 style={[
                     styles.orb,
-                    {
-                        top: '20%',
-                        left: '10%',
-                        backgroundColor: '#4C1D95',
-                        opacity: anim.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.5] }),
-                        transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.5] }) }]
-                    }
+                    { top: '20%', left: '10%', backgroundColor: '#4C1D95' },
+                    orb1Style,
                 ]}
             />
-            <Animated.View
+            <ReAnimated.View
                 style={[
                     styles.orb,
-                    {
-                        bottom: '10%',
-                        right: '5%',
-                        backgroundColor: '#0F4C81',
-                        opacity: anim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.1] }),
-                        transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [1.2, 0.8] }) }]
-                    }
+                    { bottom: '10%', right: '5%', backgroundColor: '#0F4C81' },
+                    orb2Style,
                 ]}
             />
 
@@ -79,5 +70,5 @@ const styles = StyleSheet.create({
         width: 300,
         height: 300,
         borderRadius: 150,
-    }
+    },
 });

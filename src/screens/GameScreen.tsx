@@ -6,6 +6,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useGameStore } from '../store/gameStore';
 import { BoardView } from '../components/BoardView';
 import { BlockPicker } from '../components/BlockPicker';
+import { ComboPopup } from '../components/ComboPopup';
+import { PerfectClearCelebration } from '../components/PerfectClearCelebration';
 import { playGongSound, playDecisionSound } from '../utils/sounds';
 
 export function GameScreen({ navigation }: any) {
@@ -56,21 +58,35 @@ export function GameScreen({ navigation }: any) {
                 <View style={styles.header}>
                     {/* Absolute Center Score */}
                     <View style={styles.absoluteCenter} pointerEvents="none">
-                        <Text style={styles.title}>BLOCK BATTLE</Text>
-                        <Animated.Text style={[styles.score, { transform: [{ scale: scoreScale }] }]}>
+                        <Text style={styles.title} accessibilityRole="text">BLOCK BATTLE</Text>
+                        <Animated.Text
+                            style={[styles.score, { transform: [{ scale: scoreScale }] }]}
+                            accessibilityRole="text"
+                            accessibilityLabel={`Current score: ${score}`}
+                        >
                             {score}
                         </Animated.Text>
                     </View>
 
                     {/* Left Home Button */}
-                    <TouchableOpacity onPress={handleBack}>
+                    <TouchableOpacity
+                        onPress={handleBack}
+                        accessibilityRole="button"
+                        accessibilityLabel="Home"
+                        accessibilityHint="Returns to the home screen"
+                    >
                         <BlurView intensity={30} tint="light" style={styles.iconBtn}>
                             <Ionicons name="home-outline" size={24} color="#FFF" />
                         </BlurView>
                     </TouchableOpacity>
 
                     {/* Right Restart Button */}
-                    <TouchableOpacity onPress={handleRestart}>
+                    <TouchableOpacity
+                        onPress={handleRestart}
+                        accessibilityRole="button"
+                        accessibilityLabel="Restart"
+                        accessibilityHint="Restarts the current game"
+                    >
                         <BlurView intensity={30} tint="light" style={styles.iconBtn}>
                             <Ionicons name="refresh-outline" size={24} color="#FFF" />
                         </BlurView>
@@ -78,12 +94,14 @@ export function GameScreen({ navigation }: any) {
                 </View>
 
                 <View style={styles.boardArea}>
+                    <ComboPopup />
                     <BoardView />
                 </View>
 
                 <View style={styles.tray}>
                     <BlockPicker />
                 </View>
+                <PerfectClearCelebration />
             </SafeAreaView>
         </View>
     );

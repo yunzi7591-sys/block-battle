@@ -1,13 +1,31 @@
+/**
+ * survivalAlgorithm.ts — Smart RNG (神RNG) Block Generation
+ *
+ * Game Designer:
+ *   Solo = スコア連動の段階的難易度カーブ
+ *   PvP  = ターン連動・サドンデス型カーブ (Turn 15+ で Hard 80%)
+ *
+ * Software Architect:
+ *   - 既存の canSurvive() DFS (6順列 × ライン消しシミュ × Early Exit) を再利用
+ *   - occupancy は O(1)化 (ループ前に1回だけ計算)
+ *   - Graceful Degradation: 前半は通常ウェイト、後半は緩和ウェイト、
+ *     30回リトライ失敗時は bestBlocks を返して「詰み(敗北)」をプレイヤーに委ねる
+ */
+
 import { Board, BlockShape } from './types';
 import { canPlace, placeBlock, clearLines, BOARD_SIZE, hasAnyValidPlacement } from './board';
 import { ALL_BLOCKS } from './blocks';
 import { getRandomJewelColor } from '../utils/colors';
+import {
+    getSoloTierWeights,
+    getPvPTierWeights,
+    pickBlockByTier,
+    calcOccupancy,
+    RELAXED_WEIGHTS,
+    TierWeights,
+} from './blockTiers';
 
-// For PvP: Sort blocks by size (area) to prioritize difficulty
-const COMPLEX_BLOCKS = [...ALL_BLOCKS].sort((a, b) => b.cells.length - a.cells.length);
-
-// --- Smart Drop Logic ---
-// Scans the board for empty spaces and returns a list of block IDs that fit perfectly in those gaps.
+// ─── Guaranteed Clear Pools (Hospitality Mode) ──────────
 
 const GUARANTEED_CLEAR_POOLS: string[][] = [
     ['Square3x3', 'Square3x3', 'Rect3x2'],          // Pattern A: Huge 3x8 block (3-line clear)
@@ -16,7 +34,8 @@ const GUARANTEED_CLEAR_POOLS: string[][] = [
     ['Line5H', 'Line2H', 'Dot'],                    // Pattern D: 1x8 mixed (1-line clear)
 ];
 
-// --- Ultimate Simple If-Then Hospitality Logic ---
+// ─── Island Detection ───────────────────────────────────
+
 export function getIslands(board: Board): [number, number][][] {
     const visited: boolean[][] = Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(false));
     const islands: [number, number][][] = [];
@@ -47,9 +66,9 @@ export function getIslands(board: Board): [number, number][][] {
     return islands;
 }
 
-// Helper to get random item from array based on weights
+// ─── Legacy Weighted Random (Hospitality Mode Only) ─────
+
 function getWeightedRandomBlock(pool: BlockShape[], board: Board, priorityIds: string[] = []): BlockShape {
-    // 1. Calculate occupancy
     let filledCount = 0;
     for (let r = 0; r < BOARD_SIZE; r++) {
         for (let c = 0; c < BOARD_SIZE; c++) {
@@ -57,33 +76,24 @@ function getWeightedRandomBlock(pool: BlockShape[], board: Board, priorityIds: s
         }
     }
     const occupancy = filledCount / (BOARD_SIZE * BOARD_SIZE);
-
-    // 2. Check if a rescue is needed
     const rescueNeeded = occupancy > 0.7;
 
     const weights: Record<string, number> = {
-        // --- High Weight (90% Pool Share): Big Win & Combo Blocks ---
         'Square2x2': 15.0, 'Square3x3': 15.0,
         'Rect2x3': 15.0, 'Rect3x2': 15.0,
         'Line2H': 15.0, 'Line2V': 15.0,
         'Line3H': 15.0, 'Line3V': 15.0,
         'Line4H': 15.0, 'Line4V': 15.0,
         'Line5H': 15.0, 'Line5V': 15.0,
-
-        // --- Low Weight (10% Pool Share): Complex / Obstacles ---
         'SmallL_BR': 1.0, 'SmallL_BL': 1.0, 'SmallL_TR': 1.0, 'SmallL_TL': 1.0,
         'BigL_BR': 1.0, 'BigL_BL': 1.0, 'BigL_TR': 1.0, 'BigL_TL': 1.0,
         'T_Up': 1.0, 'T_Down': 1.0, 'T_Left': 1.0, 'T_Right': 1.0,
         'S_H': 1.0, 'S_V': 1.0, 'Z_H': 1.0, 'Z_V': 1.0,
         'Diag2_DownRight': 1.0, 'Diag2_DownLeft': 1.0,
         'Diag3_DownRight': 1.0, 'Diag3_DownLeft': 1.0,
-
-        // --- Rescue Block (Dot) ---
         'Dot': rescueNeeded ? 50.0 : 0.001,
     };
 
-    // --- APPLY SMART DROP SUGGESTIONS ---
-    // If a block is suggested by the scanner, give it a massive boost
     for (const id of priorityIds) {
         weights[id] = (weights[id] || 1.0) * 100.0;
     }
@@ -99,7 +109,8 @@ function getWeightedRandomBlock(pool: BlockShape[], board: Board, priorityIds: s
     return pool[pool.length - 1];
 }
 
-// Get all possible valid placement coordinates for a single block
+// ─── DFS Placement Guarantee ────────────────────────────
+
 export function findAllPlacements(board: Board, shape: BlockShape): [number, number][] {
     const placements: [number, number][] = [];
     for (let r = 0; r < BOARD_SIZE; r++) {
@@ -112,12 +123,13 @@ export function findAllPlacements(board: Board, shape: BlockShape): [number, num
     return placements;
 }
 
-// Check if there is AT LEAST ONE valid sequence to place all 3 blocks
+/**
+ * 3つのブロック全てを配置できる順列が最低1つ存在するか検証する。
+ * 6通りの順列 × ライン消しシミュレーション × Early Exit。
+ */
 export function canSurvive(board: Board, blocks: BlockShape[]): boolean {
     if (blocks.length === 0) return true;
 
-    // We need to test all permutations of placing the 3 blocks.
-    // There are 3! = 6 permutations.
     const permutations = [
         [0, 1, 2], [0, 2, 1],
         [1, 0, 2], [1, 2, 0],
@@ -129,233 +141,292 @@ export function canSurvive(board: Board, blocks: BlockShape[]): boolean {
         const b1 = blocks[perm[1]];
         const b2 = blocks[perm[2]];
 
-        // Step 1: Find all placements for b0
         const placements0 = findAllPlacements(board, b0);
         if (placements0.length === 0) continue;
 
         for (const [r0, c0] of placements0) {
-            // Place b0 and clear lines
             let boardAfter0 = placeBlock(board, b0, r0, c0);
             boardAfter0 = clearLines(boardAfter0).newBoard;
 
-            // Step 2: Find all placements for b1
             const placements1 = findAllPlacements(boardAfter0, b1);
             if (placements1.length === 0) continue;
 
             for (const [r1, c1] of placements1) {
-                // Place b1 and clear lines
                 let boardAfter1 = placeBlock(boardAfter0, b1, r1, c1);
                 boardAfter1 = clearLines(boardAfter1).newBoard;
 
-                // Step 3: Check if b2 can be placed ANYWHERE
                 if (hasAnyValidPlacement(boardAfter1, b2)) {
-                    // If we can place all 3, this permutation works! Early exit.
-                    return true;
+                    return true; // Early Exit: 1つでも成功ルートが見つかれば即終了
                 }
             }
         }
     }
 
-    // If no permutation worked, survival is impossible with these 3 blocks.
     return false;
 }
 
-const MAX_RETRIES = 100;
+// ─── Constants ──────────────────────────────────────────
 
+const MAX_RETRIES = 30;
+const RELAXATION_THRESHOLD = 15; // attempt 15 以降で緩和ウェイトに切替
+
+// ─── Time-Slicing Yield ─────────────────────────────────
+// JSイベントループを解放し、UI描画を優先させる
+const YIELD_INTERVAL = 3; // 3 attempts ごとに yield
+const yieldToUI = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
+
+// ─── Solo Mode Block Generation ─────────────────────────
+
+/**
+ * ソロモード用ブロック生成 (同期版 — init/gameManager用)
+ */
 export function generateBlocks(
     board: Board,
     pcCount: number = 0,
     endTarget: number = 0,
-    pool: BlockShape[] = ALL_BLOCKS
+    pool: BlockShape[] = ALL_BLOCKS,
+    score: number = 0
 ): BlockShape[] {
-    const isHospitality = pcCount < endTarget;
-    let attempts = 0;
-
-    if (isHospitality) {
-        // --- 50% PERFECT START SYSTEM ---
-        let emptyCellsCount = 0;
-        for (let r = 0; r < BOARD_SIZE; r++) {
-            for (let c = 0; c < BOARD_SIZE; c++) {
-                if (board[r][c] === 0) emptyCellsCount++;
-            }
-        }
-
-        if (emptyCellsCount === BOARD_SIZE * BOARD_SIZE && Math.random() < 0.5) {
-            console.log('[Smart AI] 50% Perfect Start Triggered! Injecting Guaranteed Clear Pool.');
-            const packTemplate = GUARANTEED_CLEAR_POOLS[Math.floor(Math.random() * GUARANTEED_CLEAR_POOLS.length)];
-            const selectedBlocks = packTemplate.map(id => {
-                const base = pool.find(b => b.id === id) || pool[0];
-                return { ...base, color: getRandomJewelColor() };
-            });
-
-            // Still shuffle the array so the visual placement isn't identical
-            return selectedBlocks.sort(() => Math.random() - 0.5);
-        }
-
-        // --- SIMPLE IF-THEN HOSPITALITY ---
-
-        // 1. Define Strict Pools
-        // Basic: Dot, Squares, Lines, Rectangles
-        const basicPool = pool.filter(b => !['SmallL', 'BigL', 'T_', 'S_', 'Z_', 'Diag'].some(prefix => b.id.startsWith(prefix)));
-        // Complex: L, T, S, Z, Diag
-        const complexPool = pool.filter(b => ['SmallL', 'BigL', 'T_', 'S_', 'Z_', 'Diag'].some(prefix => b.id.startsWith(prefix)));
-
-        // 2. Scan for specific "Complex Holes" (Islands of <= 9 size)
-        const islands = getIslands(board);
-        let forcedComplexBlock: BlockShape | null = null;
-
-        for (const island of islands) {
-            if (island.length > 0 && island.length <= 9) {
-                const minR = Math.min(...island.map(p => p[0]));
-                const minC = Math.min(...island.map(p => p[1]));
-                const normalizedIsland = island.map(([ir, ic]) => [ir - minR, ic - minC]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-
-                // Check complex pool to see if any block is an EXACT match for this hole
-                for (const complexBlock of complexPool) {
-                    if (complexBlock.cells.length === island.length) {
-                        const normalizedBlock = [...complexBlock.cells].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-                        const isExactMatch = normalizedBlock.every((cell, idx) =>
-                            cell[0] === normalizedIsland[idx][0] && cell[1] === normalizedIsland[idx][1]
-                        );
-
-                        if (isExactMatch && canPlace(board, complexBlock, minR, minC)) {
-                            forcedComplexBlock = complexBlock;
-                            break; // Found our rescue block
-                        }
-                    }
-                }
-            }
-            if (forcedComplexBlock) break;
-        }
-
-        // 3. Generate Tray
-        while (attempts < MAX_RETRIES) {
-            let candidateBlocks: BlockShape[];
-
-            if (forcedComplexBlock) {
-                // If we found a hole that needs a complex block, provide it + 2 random basics
-                candidateBlocks = [
-                    forcedComplexBlock,
-                    getWeightedRandomBlock(basicPool, board),
-                    getWeightedRandomBlock(basicPool, board),
-                ];
-                candidateBlocks.sort(() => Math.random() - 0.5); // Shuffle
-            } else {
-                // Default: Gorilla-push basic blocks (Squares and Lines) ONLY
-                candidateBlocks = [
-                    getWeightedRandomBlock(basicPool, board),
-                    getWeightedRandomBlock(basicPool, board),
-                    getWeightedRandomBlock(basicPool, board),
-                ];
-            }
-
-            if (canSurvive(board, candidateBlocks)) {
-                // Assign unique jewel tones to each block in the tray
-                return candidateBlocks.map(b => ({ ...b, color: getRandomJewelColor() }));
-            }
-            attempts++;
-        }
-    }
-
-    // --- NORMAL GAMEPLAY (Post-Hospitality) ---
-    attempts = 0;
-    while (attempts < MAX_RETRIES) {
-        const candidateBlocks = [
-            getWeightedRandomBlock(pool, board),
-            getWeightedRandomBlock(pool, board),
-            getWeightedRandomBlock(pool, board),
-        ];
-
-        // During general gameplay, we still ensure they can survive
-        if (canSurvive(board, candidateBlocks)) {
-            // Assign unique jewel tones to each block in the tray
-            return candidateBlocks.map(b => ({ ...b, color: getRandomJewelColor() }));
-        }
-        attempts++;
-    }
-
-    // Fallback: If 100 random combinations fail, Force Dots to save the player
-    const dotBlock = ALL_BLOCKS.find(b => b.id === 'Dot')!;
-    const rescueBlocks = [dotBlock, dotBlock, dotBlock];
-
-    if (canSurvive(board, rescueBlocks)) {
-        console.log('[Survival Algorithm] Survival rescue triggered: Providing 3 Dots.');
-        return rescueBlocks;
-    }
-
-    // Absolute Last Resort: If even 3 dots can't be placed (extremely rare board state), 
-    // at least provide one Dot in the first slot if it's placeable.
-    console.warn('[Survival Algorithm] CRITICAL: Even Dots are struggling. Ensuring at least one Dot is provided.');
-    return [
-        { ...dotBlock, color: getRandomJewelColor() },
-        { ...dotBlock, color: getRandomJewelColor() },
-        { ...dotBlock, color: getRandomJewelColor() }
-    ];
+    return generateBlocksSync(board, pcCount, endTarget, pool, score);
 }
 
 /**
- * PvP専用・生存保証アルゴリズム
- * 現在の盤面に対し、確実に3つ全て配置可能なセット（かつ難易度高め）を見つける
+ * ソロモード用ブロック生成 (非同期版 — gameStore用)
+ * リトライループ内でイベントループを解放し、UI描画を先行させる。
  */
-export function generatePvPBlocks(board: Board): BlockShape[] {
-    console.log('[PvP AI] Simulating winnable sequence...');
+export async function generateBlocksAsync(
+    board: Board,
+    pcCount: number = 0,
+    endTarget: number = 0,
+    pool: BlockShape[] = ALL_BLOCKS,
+    score: number = 0
+): Promise<BlockShape[]> {
+    const isHospitality = pcCount < endTarget;
 
-    // 試行回数上限（無限ループ防止）
-    for (let attempt = 0; attempt < 100; attempt++) {
-        const selected: BlockShape[] = [];
-        let tempBoard = board;
+    if (isHospitality) {
+        const earlyResult = tryHospitalityEarly(board, pool);
+        if (earlyResult) return earlyResult;
 
-        // 3つのブロックを順番にシミュレーション
-        let success = true;
-        for (let i = 0; i < 3; i++) {
-            // シャッフルされた大きい順のリストから、置けるものを探す
-            const candidates = COMPLEX_BLOCKS.filter(b => {
-                // 1x1は極力避ける (最終手段)
-                if (b.id === 'Dot' && attempt < 80) return false;
+        const { basicPool, forcedComplexBlock } = prepareHospitality(board, pool);
 
-                // 実際に置ける場所があるか
-                for (let r = 0; r < BOARD_SIZE; r++) {
-                    for (let c = 0; c < BOARD_SIZE; c++) {
-                        if (canPlace(tempBoard, b, r, c)) return true;
-                    }
-                }
-                return false;
-            });
+        for (let attempts = 0; attempts < MAX_RETRIES; attempts++) {
+            if (attempts > 0 && attempts % YIELD_INTERVAL === 0) await yieldToUI();
 
-            if (candidates.length === 0) {
-                success = false;
-                break;
+            const candidateBlocks = pickHospitalityCandidates(basicPool, board, forcedComplexBlock);
+            if (canSurvive(board, candidateBlocks)) {
+                return candidateBlocks.map(b => ({ ...b, color: getRandomJewelColor() }));
             }
-
-            // 候補からランダムに1つ選択 (重み付け: 大きいやつほど選ばれやすくする)
-            const poolSize = Math.min(10, candidates.length);
-            const picked = candidates[Math.floor(Math.random() * poolSize)];
-            selected.push(picked);
-
-            // シミュレーション上の盤面を更新
-            let placed = false;
-            for (let r = 0; r < BOARD_SIZE && !placed; r++) {
-                for (let c = 0; c < BOARD_SIZE && !placed; c++) {
-                    if (canPlace(tempBoard, picked, r, c)) {
-                        tempBoard = placeBlock(tempBoard, picked, r, c);
-                        placed = true;
-                    }
-                }
-            }
-        }
-
-        if (success) {
-            console.log(`[PvP AI] Found winnable set after ${attempt + 1} attempts`);
-            return selected.map(b => ({ ...b, color: getRandomJewelColor() }));
         }
     }
 
-    // 万が一見つからなかった場合のフォールバック
-    console.warn('[PvP AI] Fallback triggered');
-    const dot = ALL_BLOCKS.find(b => b.id === 'Dot')!;
+    const occupancy = calcOccupancy(board);
+    const normalWeights = getSoloTierWeights(score);
+    let bestBlocks: BlockShape[] | null = null;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        if (attempt > 0 && attempt % YIELD_INTERVAL === 0) await yieldToUI();
+
+        const weights: TierWeights = attempt < RELAXATION_THRESHOLD ? normalWeights : RELAXED_WEIGHTS;
+        const candidateBlocks = [
+            pickBlockByTier(weights, occupancy),
+            pickBlockByTier(weights, occupancy),
+            pickBlockByTier(weights, occupancy),
+        ];
+        if (attempt === 0) bestBlocks = candidateBlocks;
+
+        if (canSurvive(board, candidateBlocks)) {
+            return candidateBlocks.map(b => ({ ...b, color: getRandomJewelColor() }));
+        }
+    }
+
+    return (bestBlocks || [
+        ALL_BLOCKS[0], ALL_BLOCKS[0], ALL_BLOCKS[0]
+    ]).map(b => ({ ...b, color: getRandomJewelColor() }));
+}
+
+// ─── Sync Implementation (no yields) ────────────────────
+
+function generateBlocksSync(
+    board: Board,
+    pcCount: number,
+    endTarget: number,
+    pool: BlockShape[],
+    score: number,
+): BlockShape[] {
+    const isHospitality = pcCount < endTarget;
+
+    if (isHospitality) {
+        const earlyResult = tryHospitalityEarly(board, pool);
+        if (earlyResult) return earlyResult;
+
+        const { basicPool, forcedComplexBlock } = prepareHospitality(board, pool);
+
+        for (let attempts = 0; attempts < MAX_RETRIES; attempts++) {
+            const candidateBlocks = pickHospitalityCandidates(basicPool, board, forcedComplexBlock);
+            if (canSurvive(board, candidateBlocks)) {
+                return candidateBlocks.map(b => ({ ...b, color: getRandomJewelColor() }));
+            }
+        }
+    }
+
+    const occupancy = calcOccupancy(board);
+    const normalWeights = getSoloTierWeights(score);
+    let bestBlocks: BlockShape[] | null = null;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const weights: TierWeights = attempt < RELAXATION_THRESHOLD ? normalWeights : RELAXED_WEIGHTS;
+        const candidateBlocks = [
+            pickBlockByTier(weights, occupancy),
+            pickBlockByTier(weights, occupancy),
+            pickBlockByTier(weights, occupancy),
+        ];
+        if (attempt === 0) bestBlocks = candidateBlocks;
+
+        if (canSurvive(board, candidateBlocks)) {
+            return candidateBlocks.map(b => ({ ...b, color: getRandomJewelColor() }));
+        }
+    }
+
+    return (bestBlocks || [
+        ALL_BLOCKS[0], ALL_BLOCKS[0], ALL_BLOCKS[0]
+    ]).map(b => ({ ...b, color: getRandomJewelColor() }));
+}
+
+// ─── Shared Hospitality Helpers ─────────────────────────
+
+function tryHospitalityEarly(board: Board, pool: BlockShape[]): BlockShape[] | null {
+    let emptyCellsCount = 0;
+    for (let r = 0; r < BOARD_SIZE; r++) {
+        for (let c = 0; c < BOARD_SIZE; c++) {
+            if (board[r][c] === 0) emptyCellsCount++;
+        }
+    }
+    if (emptyCellsCount === BOARD_SIZE * BOARD_SIZE && Math.random() < 0.5) {
+        const packTemplate = GUARANTEED_CLEAR_POOLS[Math.floor(Math.random() * GUARANTEED_CLEAR_POOLS.length)];
+        const selectedBlocks = packTemplate.map(id => {
+            const base = pool.find(b => b.id === id) || pool[0];
+            return { ...base, color: getRandomJewelColor() };
+        });
+        return selectedBlocks.sort(() => Math.random() - 0.5);
+    }
+    return null;
+}
+
+function prepareHospitality(board: Board, pool: BlockShape[]): {
+    basicPool: BlockShape[];
+    forcedComplexBlock: BlockShape | null;
+} {
+    const basicPool = pool.filter(b => !['SmallL', 'BigL', 'T_', 'S_', 'Z_', 'Diag'].some(prefix => b.id.startsWith(prefix)));
+    const complexPool = pool.filter(b => ['SmallL', 'BigL', 'T_', 'S_', 'Z_', 'Diag'].some(prefix => b.id.startsWith(prefix)));
+
+    const islands = getIslands(board);
+    let forcedComplexBlock: BlockShape | null = null;
+
+    for (const island of islands) {
+        if (island.length > 0 && island.length <= 9) {
+            const minR = Math.min(...island.map(p => p[0]));
+            const minC = Math.min(...island.map(p => p[1]));
+            const normalizedIsland = island.map(([ir, ic]) => [ir - minR, ic - minC]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+
+            for (const complexBlock of complexPool) {
+                if (complexBlock.cells.length === island.length) {
+                    const normalizedBlock = [...complexBlock.cells].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+                    const isExactMatch = normalizedBlock.every((cell, idx) =>
+                        cell[0] === normalizedIsland[idx][0] && cell[1] === normalizedIsland[idx][1]
+                    );
+                    if (isExactMatch && canPlace(board, complexBlock, minR, minC)) {
+                        forcedComplexBlock = complexBlock;
+                        break;
+                    }
+                }
+            }
+        }
+        if (forcedComplexBlock) break;
+    }
+
+    return { basicPool, forcedComplexBlock };
+}
+
+function pickHospitalityCandidates(
+    basicPool: BlockShape[],
+    board: Board,
+    forcedComplexBlock: BlockShape | null,
+): BlockShape[] {
+    if (forcedComplexBlock) {
+        const candidateBlocks = [
+            forcedComplexBlock,
+            getWeightedRandomBlock(basicPool, board),
+            getWeightedRandomBlock(basicPool, board),
+        ];
+        candidateBlocks.sort(() => Math.random() - 0.5);
+        return candidateBlocks;
+    }
     return [
-        { ...dot, color: getRandomJewelColor() },
-        { ...dot, color: getRandomJewelColor() },
-        { ...dot, color: getRandomJewelColor() }
+        getWeightedRandomBlock(basicPool, board),
+        getWeightedRandomBlock(basicPool, board),
+        getWeightedRandomBlock(basicPool, board),
     ];
+}
+
+// ─── PvP Mode Block Generation ─────────────────────────
+
+/**
+ * PvP専用ブロック生成 (同期版)
+ */
+export function generatePvPBlocks(board: Board, turnNumber: number = 1): BlockShape[] {
+    return generatePvPBlocksSync(board, turnNumber);
+}
+
+/**
+ * PvP専用ブロック生成 (非同期版 — タイムスライシング付き)
+ */
+export async function generatePvPBlocksAsync(board: Board, turnNumber: number = 1): Promise<BlockShape[]> {
+    const occupancy = calcOccupancy(board);
+    const normalWeights = getPvPTierWeights(turnNumber);
+    let bestBlocks: BlockShape[] | null = null;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        if (attempt > 0 && attempt % YIELD_INTERVAL === 0) await yieldToUI();
+
+        const weights: TierWeights = attempt < RELAXATION_THRESHOLD ? normalWeights : RELAXED_WEIGHTS;
+        const candidateBlocks = [
+            pickBlockByTier(weights, occupancy),
+            pickBlockByTier(weights, occupancy),
+            pickBlockByTier(weights, occupancy),
+        ];
+        if (attempt === 0) bestBlocks = candidateBlocks;
+
+        if (canSurvive(board, candidateBlocks)) {
+            return candidateBlocks.map(b => ({ ...b, color: getRandomJewelColor() }));
+        }
+    }
+
+    return (bestBlocks || [
+        ALL_BLOCKS[0], ALL_BLOCKS[0], ALL_BLOCKS[0]
+    ]).map(b => ({ ...b, color: getRandomJewelColor() }));
+}
+
+/** PvP 同期版 */
+function generatePvPBlocksSync(board: Board, turnNumber: number): BlockShape[] {
+    const occupancy = calcOccupancy(board);
+    const normalWeights = getPvPTierWeights(turnNumber);
+    let bestBlocks: BlockShape[] | null = null;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const weights: TierWeights = attempt < RELAXATION_THRESHOLD ? normalWeights : RELAXED_WEIGHTS;
+        const candidateBlocks = [
+            pickBlockByTier(weights, occupancy),
+            pickBlockByTier(weights, occupancy),
+            pickBlockByTier(weights, occupancy),
+        ];
+        if (attempt === 0) bestBlocks = candidateBlocks;
+
+        if (canSurvive(board, candidateBlocks)) {
+            return candidateBlocks.map(b => ({ ...b, color: getRandomJewelColor() }));
+        }
+    }
+
+    return (bestBlocks || [
+        ALL_BLOCKS[0], ALL_BLOCKS[0], ALL_BLOCKS[0]
+    ]).map(b => ({ ...b, color: getRandomJewelColor() }));
 }

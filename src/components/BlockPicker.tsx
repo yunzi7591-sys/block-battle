@@ -14,9 +14,15 @@ export const BlockPicker = ({ isPvP }: { isPvP?: boolean }) => {
     };
 
     return (
-        <View style={styles.container}>
+        <View style={styles.container} accessibilityLabel="Block picker tray" accessibilityRole="toolbar">
             {currentBlocks.map((block: any, i: number) => (
-                <View key={block ? `${block.id}-${i}` : `empty-${i}`} style={styles.slot}>
+                <View
+                    key={block ? `${block.id}-${i}` : `empty-${i}`}
+                    style={styles.slot}
+                    accessibilityLabel={block ? `Block ${i + 1}: ${block.id || 'piece'}${isPlaced(i) ? ', already placed' : ', available to drag'}` : `Empty slot ${i + 1}`}
+                    accessibilityRole="button"
+                    accessibilityHint={block && !isPlaced(i) ? "Drag to place this block on the board" : undefined}
+                >
                     {block && (
                         <DraggableBlock block={block} index={i} placed={isPlaced(i)} isPvP={isPvP} />
                     )}

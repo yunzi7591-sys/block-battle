@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useEffect, useState } from 'react';
+import React, { useRef, useCallback, useEffect, useState, useMemo } from 'react';
 import { View, StyleSheet, LayoutChangeEvent, Animated, Text, Easing, ViewStyle } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useGameStore } from '../store/gameStore';
@@ -7,63 +7,10 @@ import { useShallow } from 'zustand/react/shallow';
 import { BOARD_SIZE } from '../game/board';
 import { BOARD_CELL_MARGIN, BOARD_PADDING, CLEAR_ANIMATION_MS } from '../constants';
 import { StainedGlassCell } from './StainedGlassCell';
+import { GlassShatterCell } from './GlassShatterCell';
 import { hapticHeavy } from '../utils/haptics';
 import { playClearSound, playComboSound, playCheerSound } from '../utils/sounds';
-
-// --- Particle Animation for Cleared Cells ---
-function ClearingCellParticle({ color }: { color: string }) {
-    const anim = useRef(new Animated.Value(0)).current;
-    useEffect(() => {
-        Animated.timing(anim, {
-            toValue: 1,
-            duration: CLEAR_ANIMATION_MS * 0.8,
-            easing: Easing.out(Easing.back(1.5)),
-            useNativeDriver: false,
-        }).start();
-    }, [anim]);
-
-    const fragments = [
-        { transX: -25, transY: -25, rot: '-75deg' },
-        { transX: 25, transY: -25, rot: '75deg' },
-        { transX: -25, transY: 25, rot: '-135deg' },
-        { transX: 25, transY: 25, rot: '135deg' },
-    ];
-
-    return (
-        <View style={StyleSheet.absoluteFill}>
-            {fragments.map((frag, i) => (
-                <Animated.View
-                    key={i}
-                    style={[
-                        {
-                            position: 'absolute',
-                            width: '50%',
-                            height: '50%',
-                            backgroundColor: color,
-                            borderWidth: 1,
-                            borderColor: '#4A4A4A',
-                            left: i % 2 === 0 ? 0 : '50%',
-                            top: i < 2 ? 0 : '50%',
-                            opacity: anim.interpolate({ inputRange: [0, 0.8, 1], outputRange: [1, 1, 0] }),
-                            transform: [
-                                { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, frag.transX] }) },
-                                { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [0, frag.transY] }) },
-                                { rotate: anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', frag.rot] }) },
-                                { scale: anim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.5] }) }
-                            ],
-                        },
-                    ]}
-                >
-                    <LinearGradient
-                        colors={['rgba(255,255,255,0.9)', 'rgba(255,255,255,0.2)', 'rgba(0,0,0,0.5)']}
-                        locations={[0, 0.4, 1]}
-                        style={StyleSheet.absoluteFill}
-                    />
-                </Animated.View>
-            ))}
-        </View>
-    );
-}
+import ReAnimated, { useSharedValue, useAnimatedStyle, withSequence, withTiming, Easing as REasing } from 'react-native-reanimated';
 
 // --- Giga Glass Shatter Particle (for Perfect Clear) ---
 const SHATTER_COLORS = ['#4DA8DA', '#9B59B6', '#E74C3C', '#F1C40F', '#2ECC71', '#E67E22'];
@@ -221,6 +168,96 @@ function MulticlearOverlay() {
     );
 }
 
+// ─── Memoized Board Cell (PERF) ────────────────────────
+// Prevents 64-cell re-render cascade on preview/clearing changes.
+// Only cells whose state actually changed will re-render.
+const BoardCell = React.memo(({
+    rIndex, cIndex, cell, isClearing, isPreview, previewColor, cellSize, left, top,
+}: {
+    rIndex: number;
+    cIndex: number;
+    cell: number | string;
+    isClearing: boolean;
+    isPreview: boolean;
+    previewColor: string | undefined;
+    cellSize: number;
+    left: number;
+    top: number;
+}) => {
+    if (isClearing) {
+        const stagger = (rIndex + cIndex) * 3;
+        return (
+            <View style={[cellStyles.absolute, { left, top, width: cellSize, height: cellSize, overflow: 'visible', zIndex: 10 }]}>
+                <GlassShatterCell
+                    color={typeof cell === 'string' ? cell : '#FFFFFF'}
+                    cellSize={cellSize}
+                    staggerDelay={stagger}
+                />
+            </View>
+        );
+    }
+    if (typeof cell === 'string' || isPreview) {
+        const color = isPreview ? (previewColor || '#CCCCCC') : (cell as string);
+        return (
+            <View style={[cellStyles.absolute, { left, top, width: cellSize, height: cellSize }]}>
+                <StainedGlassCell color={color} size={cellSize} margin={0} isPreview={isPreview} rowIndex={rIndex} colIndex={cIndex} />
+            </View>
+        );
+    }
+    return <View style={[cellStyles.empty, { left, top, width: cellSize, height: cellSize }]} />;
+});
+
+const cellStyles = StyleSheet.create({
+    absolute: { position: 'absolute' },
+    empty: { position: 'absolute', backgroundColor: 'rgba(255,255,255,0.08)', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)' },
+});
+
+// ─── Opponent Move Highlight (PvP only) ─────────────────
+function OpponentMoveHighlight({ row, col, cellSize }: { row: number; col: number; cellSize: number }) {
+    const opacity = useSharedValue(1);
+    const scale = useSharedValue(1.3);
+
+    useEffect(() => {
+        opacity.value = withSequence(
+            withTiming(1, { duration: 0 }),
+            withTiming(0.6, { duration: 300 }),
+            withTiming(1, { duration: 300 }),
+            withTiming(0.6, { duration: 300 }),
+            withTiming(0, { duration: 500 }),
+        );
+        scale.value = withSequence(
+            withTiming(1.3, { duration: 0 }),
+            withTiming(1, { duration: 400, easing: REasing.out(REasing.cubic) }),
+        );
+    }, []);
+
+    const animStyle = useAnimatedStyle(() => ({
+        opacity: opacity.value,
+        transform: [{ scale: scale.value }],
+    }));
+
+    return (
+        <ReAnimated.View
+            style={[
+                {
+                    position: 'absolute',
+                    left: col * cellSize + BOARD_PADDING - 2,
+                    top: row * cellSize + BOARD_PADDING - 2,
+                    width: cellSize + 4,
+                    height: cellSize + 4,
+                    borderRadius: 4,
+                    borderWidth: 2.5,
+                    borderColor: '#E94560',
+                    backgroundColor: 'rgba(233, 69, 96, 0.15)',
+                    zIndex: 50,
+                },
+                animStyle,
+            ]}
+            pointerEvents="none"
+        />
+    );
+}
+
 export function BoardView({ isPvP }: { isPvP?: boolean }) {
     const viewRef = useRef<View>(null);
 
@@ -234,6 +271,29 @@ export function BoardView({ isPvP }: { isPvP?: boolean }) {
     const finishClear = useGameStore(s => s.finishClear);
     const showPerfectClear = useGameStore(s => s.showPerfectClear);
     const setBoardLayout = useGameStore(s => s.setBoardLayout);
+
+    // PvP opponent move highlight
+    const lastMove = isPvP ? useOnlinePvPStore(s => s.lastMove) : null;
+    const currentTurn = isPvP ? useOnlinePvPStore(s => s.currentTurn) : null;
+    const [opponentHighlight, setOpponentHighlight] = useState<{ row: number; col: number; key: number } | null>(null);
+
+    useEffect(() => {
+        if (isPvP && lastMove && lastMove.uid !== currentTurn) {
+            setOpponentHighlight({ row: lastMove.row, col: lastMove.col, key: Date.now() });
+            const timer = setTimeout(() => setOpponentHighlight(null), 1500);
+            return () => clearTimeout(timer);
+        }
+    }, [isPvP, lastMove, currentTurn]);
+
+    // Screen shake on line clear
+    const shakeX = useSharedValue(0);
+    const shakeY = useSharedValue(0);
+    const shakeStyle = useAnimatedStyle(() => ({
+        transform: [
+            { translateX: shakeX.value },
+            { translateY: shakeY.value },
+        ],
+    }));
 
     // active constants are now always from gameStore for rendering zero-lag effects
     const activeBoard = board;
@@ -274,76 +334,100 @@ export function BoardView({ isPvP }: { isPvP?: boolean }) {
     useEffect(() => {
         if (activeClearingCells && activeClearingCells.length > 0) {
             hapticHeavy();
+            // Screen shake
+            const intensity = comboCount >= 3 ? 6 : comboCount >= 2 ? 4 : 2.5;
+            shakeX.value = withSequence(
+                withTiming(intensity, { duration: 30 }),
+                withTiming(-intensity, { duration: 30 }),
+                withTiming(intensity * 0.6, { duration: 30 }),
+                withTiming(-intensity * 0.6, { duration: 30 }),
+                withTiming(0, { duration: 40 }),
+            );
+            shakeY.value = withSequence(
+                withTiming(-intensity * 0.5, { duration: 30 }),
+                withTiming(intensity * 0.5, { duration: 30 }),
+                withTiming(0, { duration: 40 }),
+            );
             if (isPendingPerfect) playCheerSound(); else playClearSound(comboCount);
             const timer = setTimeout(() => finishClear(), CLEAR_ANIMATION_MS);
             return () => clearTimeout(timer);
         }
     }, [activeClearingCells, finishClear, comboCount, isPendingPerfect]);
 
-    // Lookup sets
-    const clearingSet = new Set<string>();
-    if (activeClearingCells) activeClearingCells.forEach(([r, c]) => clearingSet.add(`${r},${c}`));
+    // Memoized lookup sets — only recomputed when source data changes
+    const clearingSet = useMemo(() => {
+        const s = new Set<string>();
+        if (activeClearingCells) activeClearingCells.forEach(([r, c]) => s.add(`${r},${c}`));
+        return s;
+    }, [activeClearingCells]);
 
-    const previewSet = new Set<string>();
-    if (activePreview) {
-        activePreview.shape.cells.forEach(([rOff, cOff]) => {
-            const r = activePreview.row + rOff; const c = activePreview.col + cOff;
-            if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) previewSet.add(`${r},${c}`);
-        });
-    }
+    const previewSet = useMemo(() => {
+        const s = new Set<string>();
+        if (activePreview) {
+            activePreview.shape.cells.forEach(([rOff, cOff]) => {
+                const r = activePreview.row + rOff; const c = activePreview.col + cOff;
+                if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) s.add(`${r},${c}`);
+            });
+        }
+        return s;
+    }, [activePreview]);
 
     const boardStyle: ViewStyle = activeLayout ? { width: activeLayout.size, height: activeLayout.size } : { width: '100%', aspectRatio: 1 };
 
     return (
-        <Animated.View
-            ref={viewRef}
-            style={[styles.board, boardStyle]}
-            onLayout={handleLayout}
-            collapsable={false}
-        >
-            {activeLayout && activeBoard.map((row: any[], rIndex: number) =>
-                row.map((cell: any, cIndex: number) => {
-                    const key = `${rIndex},${cIndex}`;
-                    const isClearing = clearingSet.has(key);
-                    const isPreview = previewSet.has(key);
-                    const left = cIndex * activeLayout.cellSize + BOARD_PADDING;
-                    const top = rIndex * activeLayout.cellSize + BOARD_PADDING;
-
-                    if (isClearing) {
+        <ReAnimated.View style={shakeStyle}>
+            <View
+                ref={viewRef}
+                style={[styles.board, boardStyle]}
+                onLayout={handleLayout}
+                collapsable={false}
+                accessibilityLabel="Game board, 8 by 8 grid"
+                accessible={true}
+            >
+                {activeLayout && activeBoard.map((row: any[], rIndex: number) =>
+                    row.map((cell: any, cIndex: number) => {
+                        const key = `${rIndex},${cIndex}`;
+                        const isPrev = previewSet.has(key);
                         return (
-                            <View key={key} style={[styles.absoluteCell, { left, top, width: activeLayout.cellSize, height: activeLayout.cellSize }]}>
-                                <ClearingCellParticle color={typeof cell === 'string' ? cell : '#FFFFFF'} />
-                            </View>
+                            <BoardCell
+                                key={key}
+                                rIndex={rIndex}
+                                cIndex={cIndex}
+                                cell={cell}
+                                isClearing={clearingSet.has(key)}
+                                isPreview={isPrev}
+                                previewColor={isPrev ? activePreview?.shape.color : undefined}
+                                cellSize={activeLayout.cellSize}
+                                left={cIndex * activeLayout.cellSize + BOARD_PADDING}
+                                top={rIndex * activeLayout.cellSize + BOARD_PADDING}
+                            />
                         );
-                    }
-                    if (typeof cell === 'string' || isPreview) {
-                        const color = isPreview ? activePreview?.shape.color : (cell as string);
-                        return (
-                            <View key={key} style={[styles.absoluteCell, { left, top, width: activeLayout.cellSize, height: activeLayout.cellSize }]}>
-                                <StainedGlassCell color={color || '#CCCCCC'} size={activeLayout.cellSize} margin={0} isPreview={isPreview} rowIndex={rIndex} colIndex={cIndex} />
-                            </View>
-                        );
-                    }
-                    return <View key={key} style={[styles.emptySlot, { left, top, width: activeLayout.cellSize, height: activeLayout.cellSize }]} />;
-                })
-            )}
+                    })
+                )}
 
-            {showPerfectClear && (
-                <View pointerEvents="none" style={styles.perfectOverlay}>
-                    <View style={styles.perfectTextBorder}><Text style={styles.perfectText}>PERFECT!</Text></View>
-                </View>
-            )}
-            <GlassShatterEffect />
-            {!isPvP && <FloatingScoreManager />}
-            {!isPvP && <MulticlearOverlay />}
-        </Animated.View>
+                {showPerfectClear && (
+                    <View pointerEvents="none" style={styles.perfectOverlay}>
+                        <View style={styles.perfectTextBorder}><Text style={styles.perfectText} accessibilityRole="text" accessibilityLabel="Perfect clear">PERFECT!</Text></View>
+                    </View>
+                )}
+                <GlassShatterEffect />
+                {isPvP && opponentHighlight && activeLayout && (
+                    <OpponentMoveHighlight
+                        key={opponentHighlight.key}
+                        row={opponentHighlight.row}
+                        col={opponentHighlight.col}
+                        cellSize={activeLayout.cellSize}
+                    />
+                )}
+                {!isPvP && <FloatingScoreManager />}
+                {!isPvP && <MulticlearOverlay />}
+            </View>
+        </ReAnimated.View>
     );
 }
 
 const styles = StyleSheet.create({
     board: { backgroundColor: 'rgba(0,0,0,0.85)', borderRadius: 12, overflow: 'hidden', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.1)' },
-    absoluteCell: { position: 'absolute' },
-    emptySlot: { position: 'absolute', backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.05)' },
     shatterEffectContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 150 },
     floatingScoreContainer: { position: 'absolute', width: 100, height: 40, justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
     floatingScoreText: { color: '#FFD700', fontSize: 24, fontWeight: 'bold', textShadowColor: 'rgba(0,0,0,0.75)', textShadowRadius: 3 },

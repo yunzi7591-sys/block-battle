@@ -1,16 +1,18 @@
-import { signInAnonymously } from "firebase/auth";
+import { signInAnonymously, deleteUser } from "firebase/auth";
 import {
     collection,
     doc,
     setDoc,
     getDoc,
+    deleteDoc,
     query,
     orderBy,
     limit,
     getDocs,
     DocumentData
 } from "firebase/firestore";
-import { auth, db } from "../config/firebase";
+import { ref, remove } from "firebase/database";
+import { auth, db, rtdb } from "../config/firebase";
 
 export interface UserBackendData {
     uid: string;
@@ -138,6 +140,37 @@ export const apiService = {
         } catch (error: any) {
             console.error('[Firebase] Update Error:', error);
             return false;
+        }
+    },
+
+    /**
+     * Deletes the current user's account and all associated data.
+     * 1. Firestore users/{uid} document
+     * 2. RTDB users/{uid} node (if exists)
+     * 3. Firebase Auth user
+     */
+    deleteAccount: async (uid: string): Promise<void> => {
+        console.log(`[Firebase] deleteAccount for ${uid}`);
+        try {
+            // 1. Delete Firestore user document
+            const userRef = doc(db, "users", uid);
+            await deleteDoc(userRef);
+            console.log(`[Firebase] Firestore user/${uid} deleted.`);
+
+            // 2. Delete RTDB user node (if exists)
+            const rtdbUserRef = ref(rtdb, `users/${uid}`);
+            await remove(rtdbUserRef);
+            console.log(`[Firebase] RTDB users/${uid} deleted.`);
+
+            // 3. Delete Firebase Auth user
+            const currentUser = auth.currentUser;
+            if (currentUser && currentUser.uid === uid) {
+                await deleteUser(currentUser);
+                console.log(`[Firebase] Auth user ${uid} deleted.`);
+            }
+        } catch (error: any) {
+            console.error('[Firebase] deleteAccount Error:', error);
+            throw new Error(`Account deletion failed: ${error.message}`);
         }
     }
 };

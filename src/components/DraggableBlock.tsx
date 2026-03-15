@@ -10,10 +10,9 @@ import {
 } from 'react-native';
 import { useGameStore } from '../store/gameStore';
 import { useOnlinePvPStore } from '../store/onlinePvPStore';
-import { useUserStore } from '../store/userStore';
 import { BlockShape } from '../game/types';
 import { canPlace } from '../game/board';
-import { BOARD_CELL_MARGIN, BOARD_PADDING, TRAY_CELL_SIZE, PREVIEW_Y_OFFSET, VISUAL_Y_OFFSET } from '../constants';
+import { BOARD_CELL_MARGIN, BOARD_PADDING, TRAY_CELL_SIZE, DRAG_ACCEL, LIFT_OFFSET } from '../constants';
 import { StainedGlassCell } from './StainedGlassCell';
 import { hapticLight, hapticMedium, hapticError } from '../utils/haptics';
 import { playPlaceSound, playErrorSound, playBGM } from '../utils/sounds';
@@ -37,23 +36,21 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
     const grabOffsetRef = useRef<{ initialAbsX: number; initialAbsY: number }>({ initialAbsX: 0, initialAbsY: 0 });
     const lastPreviewRef = useRef<{ row: number; col: number } | null>(null);
 
-    // Dynamic Store Subscription
-    const singleStore = useGameStore();
-    const pvpStore = useOnlinePvPStore();
+    // ─── Selective Store Subscriptions (PERF) ──────────────
+    // CRITICAL: Only subscribe to render-affecting properties.
+    // PanResponder handlers read fresh state via getState().
+    // Full-store subscription was causing re-renders on EVERY
+    // state change (score, combo, clearing, etc.) during gameplay.
+    const activeBoardLayout = useGameStore(s => s.boardLayout);
 
-    // Unified Store Authority (Phase 33 DRY - Use gameStore for all math/rendering)
-    const activeBoard = singleStore.board;
-    const activeBoardLayout = singleStore.boardLayout;
-    const myUid = useUserStore(s => s.uid);
+    // Actions — Zustand returns stable refs, never trigger re-renders
+    const soloPlaceBlock = useGameStore(s => s.placeBlock);
+    const activeSetPreview = useGameStore(s => s.setPreview);
+    const soloTriggerBGM = useGameStore(s => s.triggerBGM);
+    const pvpPlaceBlockSync = useOnlinePvPStore(s => s.placeBlockSync);
 
-    // Actions
-    const activePlaceBlock = isPvP ? pvpStore.placeBlockSync : singleStore.placeBlock;
-    // Phase 32: Unify Preview Source (BoardView only listens to gameStore)
-    const activeSetPreview = singleStore.setPreview;
-    const activeTriggerBGM = isPvP ? () => { } : singleStore.triggerBGM;
-
-    // Unified Turn Authority (Phase 28/29)
-    const isMyTurn = singleStore.isMyTurn;
+    const activePlaceBlock = isPvP ? pvpPlaceBlockSync : soloPlaceBlock;
+    const activeTriggerBGM = isPvP ? () => {} : soloTriggerBGM;
 
     // EMERGENCY OVERRIDE (For Debugging Only):
     // const isMyTurnOverride = true; 
@@ -103,11 +100,6 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
 
         // 3. STRICT COLLISION CHECK (uses fresh block, not stale closure)
         const canBePlaced = canPlace(currentBoard, currentBlock, gridRow, gridCol);
-
-        // Phase 32 Debug: Visibility into Grid Calculation
-        if (gridRow >= -1 && gridRow <= 8 && gridCol >= -1 && gridCol <= 8) {
-            console.log(`LOG [Drag/Math] TopLeft(${visualTopLeftX.toFixed(0)}, ${visualTopLeftY.toFixed(0)}) Board(${bl.x.toFixed(0)}, ${bl.y.toFixed(0)}) => Row: ${gridRow}, Col: ${gridCol} (CanPlace: ${canBePlaced})`);
-        }
 
         if (canBePlaced) {
             return { row: gridRow, col: gridCol };
@@ -164,8 +156,8 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
 
                 grabOffsetRef.current = { initialAbsX, initialAbsY };
 
-                // 3-Layer Y offset: Visual block floats at VISUAL_Y_OFFSET above finger
-                pan.setOffset({ x: 0, y: VISUAL_Y_OFFSET });
+                // Unified lift: block floats at LIFT_OFFSET above finger
+                pan.setOffset({ x: 0, y: LIFT_OFFSET });
                 pan.setValue({ x: 0, y: 0 });
 
                 // Scale to 1.0 — exact match with board cell size
@@ -184,29 +176,25 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                 if (!isDraggingRef.current) return;
                 const { initialAbsX, initialAbsY } = grabOffsetRef.current;
 
-                // ─── 3-Layer Y-Axis Architecture ───────────────
+                // ─── Unified Accelerated Model ─────────────────
                 //
-                //  Layer 1 — Touch:   gesture.dx, gesture.dy (raw finger delta)
-                //  Layer 2 — Preview: Touch + PREVIEW_Y_OFFSET (-40px)
-                //                     → Used for hit-test / grid snap
-                //  Layer 3 — Visual:  Touch + VISUAL_Y_OFFSET (-120px)
-                //                     → Used for block rendering (pan.setValue)
+                //  Acceleration: DRAG_ACCEL (1.5x) on both axes
+                //  Single coordinate set for rendering AND hit-test
+                //  LIFT_OFFSET applied via pan.offset (set in onGrant)
                 //
-                //  X axis: 1:1 tracking (dx used directly, no multiplier)
                 // ────────────────────────────────────────────────
 
-                const dx = gesture.dx; // X: pure 1:1 tracking
-                const dy = gesture.dy; // Y: raw finger delta
+                const acceleratedDx = gesture.dx * DRAG_ACCEL;
+                const acceleratedDy = gesture.dy * DRAG_ACCEL;
 
-                // 1. UI RENDERING — block floats at VISUAL_Y_OFFSET above finger
-                //    pan.offset already set to VISUAL_Y_OFFSET in onGrant
-                pan.x.setValue(dx);
-                pan.y.setValue(dy);
+                // 1. UI RENDERING — accelerated + LIFT_OFFSET via pan.offset
+                pan.x.setValue(acceleratedDx);
+                pan.y.setValue(acceleratedDy);
 
-                // 2. HIT-TEST — preview snaps at PREVIEW_Y_OFFSET (closer to finger)
-                //    This is where the "shadow" on the board will appear
-                const previewTopLeftX = initialAbsX + dx;
-                const previewTopLeftY = initialAbsY + dy + PREVIEW_Y_OFFSET;
+                // 2. HIT-TEST — SAME coordinates as rendering (unified)
+                //    targetXY = where the block's top-left is visually rendered
+                const previewTopLeftX = initialAbsX + acceleratedDx;
+                const previewTopLeftY = initialAbsY + acceleratedDy + LIFT_OFFSET;
 
                 // Phase 38: Read fresh block from store to avoid stale closure
                 const currentGameState = useGameStore.getState();
@@ -231,7 +219,6 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                         lastPreviewRef.current.col !== target.col;
 
                     if (isNewPos) {
-                        console.log(`[SnapSync] Grid Index Changed: (${target.row}, ${target.col})`);
                         hapticLight();
                         lastPreviewRef.current = target;
                         activeSetPreview({
@@ -270,18 +257,15 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                 const dropIsProcessing = currentPvp.isProcessingPlacement;
                 const dropStatus = currentPvp.status;
 
-                console.log(`[Drag/Drop] State at drop: isMyTurn=${dropIsMyTurn}, placedFlags=${JSON.stringify(dropPlacedFlags)}, isProcessing=${dropIsProcessing}, status=${dropStatus}, target=${JSON.stringify(target)}, blockIndex=${index}, hasBlock=${!!freshBlock}`);
-
                 if (!freshBlock) {
-                    console.warn(`[Drag/Drop] Rejected: block at index ${index} is null/undefined in store`);
+                    // no-op: block is null
                 } else if (target && canPlace(board, freshBlock, target.row, target.col)) {
                     // Extra guard: verify placement is still allowed
                     if (!dropIsMyTurn) {
-                        console.warn(`[Drag/Drop] Rejected: isMyTurn is false at drop time`);
+                        // Rejected: not my turn
                     } else if (dropPlacedFlags[index]) {
-                        console.warn(`[Drag/Drop] Rejected: placedFlags[${index}] is already true`);
+                        // Rejected: already placed
                     } else {
-                        console.log(`[PlacementSuccess] Block ${index} at (${target.row}, ${target.col})`);
                         hapticMedium();
                         playPlaceSound();
                         activePlaceBlock(index, target.row, target.col);
@@ -293,19 +277,6 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                 }
 
                 // CANCEL: Returns to tray
-                const reason = !target
-                    ? "No target (Out of Bounds)"
-                    : !freshBlock
-                        ? `block[${index}] is null in store`
-                        : !canPlace(board, freshBlock, target.row, target.col)
-                            ? `canPlace=false at (${target.row},${target.col})`
-                            : !dropIsMyTurn
-                                ? "isMyTurn=false"
-                                : dropPlacedFlags[index]
-                                    ? `placedFlags[${index}]=true`
-                                    : "Unknown";
-                console.log(`LOG [PlacementCancelled] Reason: ${reason}`);
-
                 lastPreviewRef.current = null;
                 hapticError();
                 playErrorSound();

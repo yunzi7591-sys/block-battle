@@ -11,30 +11,14 @@ export function canPlace(board: Board, shape: BlockShape, row: number, col: numb
     for (const [rOff, cOff] of shape.cells) {
         const targetRow = row + rOff;
         const targetCol = col + cOff;
-
-        // Bounds check
-        if (targetRow < 0 || targetRow >= BOARD_SIZE || targetCol < 0 || targetCol >= BOARD_SIZE) {
-            console.log(`[canPlace] Reject (OOB): (${targetRow}, ${targetCol}) for base (${row}, ${col})`);
-            return false;
-        }
-
-        // Overlap check
-        if (board[targetRow][targetCol] !== 0) {
-            console.log(`[canPlace] Reject (Overlap): (${targetRow}, ${targetCol}) for base (${row}, ${col})`);
-            return false;
-        }
+        if (targetRow < 0 || targetRow >= BOARD_SIZE || targetCol < 0 || targetCol >= BOARD_SIZE) return false;
+        if (board[targetRow][targetCol] !== 0) return false;
     }
-    console.log(`[canPlace] Result: true for base (${row}, ${col})`);
     return true;
 }
 
 export function placeBlock(board: Board, shape: BlockShape, row: number, col: number): Board {
-    if (!canPlace(board, shape, row, col)) {
-        console.warn(`[StoreSafety] Silent block in placeBlock at (${row}, ${col}). Overlap or OOB detected.`);
-        return board; // Silent safety return
-    }
-
-    // Deep clone for immutability
+    if (!canPlace(board, shape, row, col)) return board;
     const newBoard = board.map(r => [...r]);
 
     for (const [rOff, cOff] of shape.cells) {
@@ -103,10 +87,7 @@ export function getScore(linesCleared: number): number {
 }
 
 export function hasAnyValidPlacement(board: Board, shape: BlockShape): boolean {
-    if (!shape || !shape.cells) {
-        console.warn('[hasAnyValidPlacement] Received null/invalid shape. Returning false.');
-        return false;
-    }
+    if (!shape || !shape.cells) return false;
     for (let r = 0; r < BOARD_SIZE; r++) {
         for (let c = 0; c < BOARD_SIZE; c++) {
             if (canPlace(board, shape, r, c)) {

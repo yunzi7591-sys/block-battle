@@ -27,7 +27,13 @@ export function HomeScreen({ navigation }: any) {
             <CathedralBackground />
 
             <View style={[styles.topHeader, { paddingTop: insets.top + 10 }]}>
-                <TouchableOpacity style={styles.profileBtn} onPress={handleProfile}>
+                <TouchableOpacity
+                    style={styles.profileBtn}
+                    onPress={handleProfile}
+                    accessibilityRole="button"
+                    accessibilityLabel="Profile"
+                    accessibilityHint="Opens your player profile"
+                >
                     <BlurView intensity={40} tint="light" style={styles.profileBlur}>
                         <Ionicons name="person" size={20} color="#FFF" />
                     </BlurView>
@@ -44,20 +50,32 @@ export function HomeScreen({ navigation }: any) {
             >
                 {/* Header / High Score Panel */}
                 <BlurView intensity={30} tint="light" style={styles.glassPanel}>
-                    <Text style={styles.panelLabel}>BEST PERFORMANCE</Text>
-                    <Text style={styles.highScore}>{highScore.toLocaleString()}</Text>
+                    <Text style={styles.panelLabel} accessibilityRole="text">BEST PERFORMANCE</Text>
+                    <Text style={styles.highScore} accessibilityRole="text" accessibilityLabel={`High score: ${highScore.toLocaleString()}`}>{highScore.toLocaleString()}</Text>
                 </BlurView>
 
                 <View style={styles.buttonContainer}>
                     {/* Main Interaction */}
-                    <TouchableOpacity style={styles.mainButton} onPress={handlePlay}>
+                    <TouchableOpacity
+                        style={styles.mainButton}
+                        onPress={handlePlay}
+                        accessibilityRole="button"
+                        accessibilityLabel="Single Play"
+                        accessibilityHint="Starts a single player game"
+                    >
                         <BlurView intensity={50} tint="light" style={styles.buttonBlur}>
                             <Text style={styles.buttonText}>SINGLE PLAY</Text>
                         </BlurView>
                     </TouchableOpacity>
 
                     {/* Online PvP Interaction */}
-                    <TouchableOpacity style={styles.mainButton} onPress={() => { playDecisionSound(); navigation.navigate('Lobby'); }}>
+                    <TouchableOpacity
+                        style={styles.mainButton}
+                        onPress={() => { playDecisionSound(); navigation.navigate('Lobby'); }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Online Match"
+                        accessibilityHint="Opens the online matchmaking lobby"
+                    >
                         <BlurView intensity={50} tint="light" style={styles.buttonBlur}>
                             <Text style={styles.buttonText}>ONLINE MATCH</Text>
                         </BlurView>

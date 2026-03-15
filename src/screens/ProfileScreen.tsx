@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,10 +9,40 @@ import { playDecisionSound } from '../utils/sounds';
 import { apiService } from '../services/apiService';
 import { Alert } from 'react-native';
 
+// TODO: プロデューサーが実際のGitHub PagesのURLに置換すること
+const TERMS_URL = 'https://<ユーザー名>.github.io/<リポジトリ名>/terms.html';
+const PRIVACY_URL = 'https://<ユーザー名>.github.io/<リポジトリ名>/privacy.html';
+
 export function ProfileScreen({ navigation }: any) {
-    const { userName, highScore, rating, setUserName, uid, resetAccount } = useUserStore();
+    const { userName, highScore, rating, setUserName, uid, deleteAccount } = useUserStore();
     const [tempName, setTempName] = useState(userName);
     const [isSaving, setIsSaving] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
+
+    const handleDeleteAccount = () => {
+        Alert.alert(
+            'アカウントを削除',
+            '本当に削除しますか？この操作は取り消せません。すべてのゲームデータ（スコア、レーティング）が完全に失われます。',
+            [
+                { text: 'キャンセル', style: 'cancel' },
+                {
+                    text: '削除する',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setIsDeleting(true);
+                        try {
+                            await deleteAccount();
+                            navigation.reset({ index: 0, routes: [{ name: 'Title' }] });
+                        } catch (e: any) {
+                            Alert.alert('ERROR', e.message || 'アカウントの削除に失敗しました。');
+                        } finally {
+                            setIsDeleting(false);
+                        }
+                    }
+                }
+            ]
+        );
+    };
 
     const handleSave = async () => {
         if (tempName.trim().length === 0) return;
@@ -37,32 +67,6 @@ export function ProfileScreen({ navigation }: any) {
         }
     };
 
-    const handleResetAccount = () => {
-        Alert.alert(
-            "RESET ACCOUNT",
-            "This will permanently clear your progress and generate a new User ID. Are you sure?",
-            [
-                { text: "CANCEL", style: "cancel" },
-                {
-                    text: "RESET",
-                    style: "destructive",
-                    onPress: async () => {
-                        setIsSaving(true);
-                        try {
-                            await resetAccount();
-                            Alert.alert("SUCCESS", "Account has been reset with a new ID.");
-                            setTempName(useUserStore.getState().userName);
-                        } catch (e: any) {
-                            Alert.alert("ERROR", e.message || "Failed to reset account.");
-                        } finally {
-                            setIsSaving(false);
-                        }
-                    }
-                }
-            ]
-        );
-    };
-
     return (
         <View style={styles.container}>
             <CathedralBackground />
@@ -76,11 +80,14 @@ export function ProfileScreen({ navigation }: any) {
                             style={styles.backButton}
                             onPress={() => { playDecisionSound(); navigation.goBack(); }}
                             hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Back to Home"
+                            accessibilityHint="Returns to the home screen"
                         >
                             <Ionicons name="chevron-back" size={24} color="#FFF" />
                             <Text style={styles.backText}>HOME</Text>
                         </TouchableOpacity>
-                        <Text style={styles.title}>MY PROFILE</Text>
+                        <Text style={styles.title} accessibilityRole="header">MY PROFILE</Text>
                     </View>
 
                     <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -91,7 +98,7 @@ export function ProfileScreen({ navigation }: any) {
                             </View>
 
                             <View style={styles.inputSection}>
-                                <Text style={styles.label}>PLAYER NAME</Text>
+                                <Text style={styles.label} accessibilityRole="text">PLAYER NAME</Text>
                                 <TextInput
                                     style={styles.input}
                                     value={tempName}
@@ -99,6 +106,8 @@ export function ProfileScreen({ navigation }: any) {
                                     maxLength={12}
                                     placeholder="Enter name..."
                                     placeholderTextColor="rgba(255,255,255,0.3)"
+                                    accessibilityLabel="Player name"
+                                    accessibilityHint="Enter your display name, up to 12 characters"
                                 />
                                 {uid && (
                                     <Text style={styles.uidText}>ID: {uid}</Text>
@@ -107,6 +116,10 @@ export function ProfileScreen({ navigation }: any) {
                                     style={[styles.saveBtn, tempName === userName && styles.saveBtnDisabled]}
                                     onPress={handleSave}
                                     disabled={tempName === userName || isSaving}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={isSaving ? 'Saving changes' : 'Save Changes'}
+                                    accessibilityHint="Saves your updated player name"
+                                    accessibilityState={{ disabled: tempName === userName || isSaving }}
                                 >
                                     <Text style={styles.saveBtnText}>{isSaving ? 'SAVING...' : 'SAVE CHANGES'}</Text>
                                 </TouchableOpacity>
@@ -115,36 +128,46 @@ export function ProfileScreen({ navigation }: any) {
 
                         {/* Stats Section */}
                         <View style={styles.statsContainer}>
-                            <BlurView intensity={30} tint="light" style={styles.statBox}>
+                            <BlurView intensity={30} tint="light" style={styles.statBox} accessibilityLabel={`Best score: ${highScore.toLocaleString()}`} accessibilityRole="text">
                                 <Ionicons name="trophy" size={24} color="#FFD700" style={styles.statIcon} />
                                 <Text style={styles.statLabel}>BEST SCORE</Text>
                                 <Text style={styles.statValue}>{highScore.toLocaleString()}</Text>
                             </BlurView>
 
-                            <BlurView intensity={30} tint="light" style={styles.statBox}>
+                            <BlurView intensity={30} tint="light" style={styles.statBox} accessibilityLabel={`PvP rating: ${rating.toLocaleString()}`} accessibilityRole="text">
                                 <Ionicons name="flash" size={24} color="#E94560" style={styles.statIcon} />
                                 <Text style={styles.statLabel}>PvP RATING</Text>
                                 <Text style={styles.statValue}>{rating.toLocaleString()}</Text>
                             </BlurView>
                         </View>
 
-                        {/* Danger Zone: Account Reset */}
-                        <View style={styles.dangerZone}>
-                            <Text style={styles.dangerTitle}>DANGER ZONE</Text>
-                            <TouchableOpacity
-                                style={styles.resetBtn}
-                                onPress={handleResetAccount}
-                                disabled={isSaving}
-                            >
-                                <BlurView intensity={20} tint="dark" style={styles.resetBlur}>
-                                    <Ionicons name="trash-outline" size={20} color="#FF6B6B" />
-                                    <Text style={styles.resetBtnText}>CREATE NEW ACCOUNT (RESET)</Text>
-                                </BlurView>
+                        {/* Legal Links */}
+                        <View style={styles.legalSection}>
+                            <TouchableOpacity onPress={() => Linking.openURL(TERMS_URL)} accessibilityRole="link" accessibilityLabel="利用規約を開く">
+                                <Text style={styles.legalLink}>利用規約 (Terms of Service)</Text>
                             </TouchableOpacity>
-                            <Text style={styles.dangerSub}>
-                                This will sign you out and generate a completely new Player ID.
-                            </Text>
+                            <TouchableOpacity onPress={() => Linking.openURL(PRIVACY_URL)} accessibilityRole="link" accessibilityLabel="プライバシーポリシーを開く">
+                                <Text style={styles.legalLink}>プライバシーポリシー (Privacy Policy)</Text>
+                            </TouchableOpacity>
                         </View>
+
+                        {/* Account Deletion */}
+                        <View style={styles.dangerSection}>
+                            <TouchableOpacity
+                                style={styles.deleteBtn}
+                                onPress={handleDeleteAccount}
+                                disabled={isDeleting}
+                                accessibilityRole="button"
+                                accessibilityLabel="アカウントを削除する"
+                                accessibilityHint="アカウントとすべてのデータを完全に削除します"
+                            >
+                                <Ionicons name="trash-outline" size={18} color="#FF4444" style={{ marginRight: 8 }} />
+                                <Text style={styles.deleteBtnText}>
+                                    {isDeleting ? '削除中...' : 'アカウントを削除する'}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+
                     </ScrollView>
                 </KeyboardAvoidingView>
             </SafeAreaView>
@@ -230,45 +253,37 @@ const styles = StyleSheet.create({
     statIcon: { marginBottom: 10 },
     statLabel: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
     statValue: { color: '#FFF', fontSize: 24, fontWeight: '900', marginTop: 5 },
-    dangerZone: {
-        marginTop: 40,
-        paddingTop: 40,
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(255,255,255,0.1)',
+    legalSection: {
         alignItems: 'center',
-        gap: 15
+        gap: 12,
+        paddingVertical: 8,
     },
-    dangerTitle: {
-        color: '#FF6B6B',
+    legalLink: {
+        color: 'rgba(255,255,255,0.5)',
         fontSize: 12,
-        fontWeight: '900',
-        letterSpacing: 2
+        textDecorationLine: 'underline',
+        letterSpacing: 0.5,
     },
-    resetBtn: {
-        width: '100%',
-        borderRadius: 15,
-        overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: 'rgba(255,107,107,0.3)'
+    dangerSection: {
+        alignItems: 'center',
+        paddingTop: 16,
+        paddingBottom: 40,
     },
-    resetBlur: {
+    deleteBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 15,
-        gap: 10
+        paddingVertical: 14,
+        paddingHorizontal: 24,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(255,68,68,0.3)',
+        backgroundColor: 'rgba(255,68,68,0.08)',
     },
-    resetBtnText: {
-        color: '#FF6B6B',
-        fontWeight: '900',
-        fontSize: 12,
-        letterSpacing: 1
+    deleteBtnText: {
+        color: '#FF4444',
+        fontSize: 14,
+        fontWeight: '700',
+        letterSpacing: 0.5,
     },
-    dangerSub: {
-        color: 'rgba(255,255,255,0.3)',
-        fontSize: 10,
-        textAlign: 'center',
-        paddingHorizontal: 20,
-        lineHeight: 16
-    }
 });

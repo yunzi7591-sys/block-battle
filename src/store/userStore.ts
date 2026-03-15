@@ -19,8 +19,8 @@ interface UserState {
     setAuthLoading: (loading: boolean) => void;
     initializeAuth: () => Promise<void>;
     setHasHydrated: (state: boolean) => void;
-    resetAccount: () => Promise<void>;
     syncProfile: () => Promise<void>;
+    deleteAccount: () => Promise<void>;
 }
 
 const generateInitialName = () => {
@@ -71,6 +71,25 @@ export const useUserStore = create<UserState>()(
                 }
             },
 
+            deleteAccount: async () => {
+                const { uid } = get();
+                if (!uid) throw new Error('No account to delete.');
+                // 1. Delete from Firebase (Auth + Firestore + RTDB)
+                await apiService.deleteAccount(uid);
+                // 2. Clear local AsyncStorage
+                await AsyncStorage.clear();
+                // 3. Reset local state to defaults
+                set({
+                    userName: generateInitialName(),
+                    highScore: 0,
+                    rating: 1500,
+                    uid: null,
+                    isAuthLoading: false,
+                    _hasHydrated: true,
+                });
+                console.log('[UserStore] Account deleted and local state reset.');
+            },
+
             initializeAuth: async () => {
                 const state = get();
                 const { uid, _hasHydrated, setUid, setAuthLoading } = state;
@@ -107,33 +126,6 @@ export const useUserStore = create<UserState>()(
                 }
             },
 
-            resetAccount: async () => {
-                console.log('[Auth] Resetting Account...');
-                const { auth } = await import('../config/firebase');
-
-                try {
-                    // 1. Sign out from Firebase
-                    await auth.signOut();
-
-                    // 2. Clear local storage
-                    await AsyncStorage.removeItem('user-storage');
-
-                    // 3. Reset in-memory state
-                    set({
-                        uid: null,
-                        userName: generateInitialName(),
-                        highScore: 0,
-                        rating: 1500,
-                    });
-
-                    // 4. Force re-login
-                    await get().initializeAuth();
-                    console.log('[Auth] Account reset complete.');
-                } catch (e) {
-                    console.error('[Auth] Reset Account Error:', e);
-                    throw e;
-                }
-            },
         }),
         {
             name: 'user-storage',

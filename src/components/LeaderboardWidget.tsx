@@ -87,12 +87,18 @@ export function LeaderboardWidget() {
                 <TouchableOpacity
                     style={[styles.topTab, type === 'score' && styles.activeTopTab]}
                     onPress={() => setType('score')}
+                    accessibilityRole="tab"
+                    accessibilityLabel="Single Score leaderboard"
+                    accessibilityState={{ selected: type === 'score' }}
                 >
                     <Text style={[styles.topTabText, type === 'score' && styles.activeTopTabText]}>SINGLE SCORE</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                     style={[styles.topTab, type === 'rate' && styles.activeTopTab]}
                     onPress={() => setType('rate')}
+                    accessibilityRole="tab"
+                    accessibilityLabel="PvP Rating leaderboard"
+                    accessibilityState={{ selected: type === 'rate' }}
                 >
                     <Text style={[styles.topTabText, type === 'rate' && styles.activeTopTabText]}>PVP RATING</Text>
                 </TouchableOpacity>
@@ -107,18 +113,30 @@ export function LeaderboardWidget() {
                             <TouchableOpacity
                                 style={[styles.tab, period === 'weekly' && styles.activeTab]}
                                 onPress={() => setPeriod('weekly')}
+                                accessibilityRole="tab"
+                                accessibilityLabel="Weekly rankings"
+                                accessibilityState={{ selected: period === 'weekly' }}
                             >
                                 <Text style={[styles.tabText, period === 'weekly' && styles.activeTabText]}>WEEKLY</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={[styles.tab, period === 'monthly' && styles.activeTab]}
                                 onPress={() => setPeriod('monthly')}
+                                accessibilityRole="tab"
+                                accessibilityLabel="Monthly rankings"
+                                accessibilityState={{ selected: period === 'monthly' }}
                             >
                                 <Text style={[styles.tabText, period === 'monthly' && styles.activeTabText]}>MONTHLY</Text>
                             </TouchableOpacity>
                         </View>
                     )}
-                    <TouchableOpacity onPress={() => loadData(true)} style={styles.refreshBtn}>
+                    <TouchableOpacity
+                        onPress={() => loadData(true)}
+                        style={styles.refreshBtn}
+                        accessibilityRole="button"
+                        accessibilityLabel="Refresh leaderboard"
+                        accessibilityHint="Fetches the latest leaderboard data"
+                    >
                         <Ionicons name="refresh" size={14} color="rgba(255,255,255,0.5)" />
                     </TouchableOpacity>
                 </View>
@@ -137,7 +155,13 @@ export function LeaderboardWidget() {
                     <View style={styles.stateOverlay}>
                         <Ionicons name="alert-circle" size={24} color="#E94560" />
                         <Text style={[styles.stateText, { color: '#E94560' }]}>{error}</Text>
-                        <TouchableOpacity style={styles.retryBtn} onPress={() => loadData(true)}>
+                        <TouchableOpacity
+                            style={styles.retryBtn}
+                            onPress={() => loadData(true)}
+                            accessibilityRole="button"
+                            accessibilityLabel="Retry"
+                            accessibilityHint="Retries fetching leaderboard data"
+                        >
                             <Text style={styles.retryBtnText}>RETRY</Text>
                         </TouchableOpacity>
                     </View>
@@ -147,7 +171,12 @@ export function LeaderboardWidget() {
                     <ScrollView style={styles.listScrollView} showsVerticalScrollIndicator={false}>
                         <View style={styles.list}>
                             {top10.map((item: LeaderboardEntry) => (
-                                <View key={item.id} style={[styles.row, getRankStyle(item.rank)]}>
+                                <View
+                                    key={item.id}
+                                    style={[styles.row, getRankStyle(item.rank)]}
+                                    accessibilityRole="text"
+                                    accessibilityLabel={`Rank ${item.rank}: ${item.name}, ${type === 'score' ? 'score' : 'rating'} ${item.value.toLocaleString()}`}
+                                >
                                     <View style={styles.rankCell}>
                                         {renderRankIcon(item.rank)}
                                     </View>
@@ -168,7 +197,7 @@ export function LeaderboardWidget() {
                     end={{ x: 1, y: 0 }}
                     style={styles.myRankFooter}
                 >
-                    <View style={styles.rankCell}>
+                    <View style={styles.rankCell} accessibilityRole="text" accessibilityLabel={`Your rank: ${myStats.rank}, ${type === 'score' ? 'score' : 'rating'} ${myStats.value.toLocaleString()}`}>
                         <Text style={[styles.myRankText, type === 'rate' && { color: '#E94560' }]}>{myStats.rank}</Text>
                     </View>
                     <Text style={styles.myNameCell}>{userName} (YOU)</Text>
@@ -334,17 +363,24 @@ const styles = StyleSheet.create({
         fontVariant: ['tabular-nums'],
     },
     rank1: {
-        backgroundColor: 'rgba(255, 215, 0, 0.08)',
+        backgroundColor: 'rgba(255, 215, 0, 0.15)',
+        borderLeftWidth: 3,
+        borderLeftColor: '#FFD700',
     },
     rank2: {
-        backgroundColor: 'rgba(192, 192, 192, 0.05)',
+        backgroundColor: 'rgba(192, 192, 192, 0.10)',
+        borderLeftWidth: 3,
+        borderLeftColor: '#C0C0C0',
     },
     rank3: {
-        backgroundColor: 'rgba(205, 127, 50, 0.05)',
+        backgroundColor: 'rgba(205, 127, 50, 0.10)',
+        borderLeftWidth: 3,
+        borderLeftColor: '#CD7F32',
     },
     myRankFooterContainer: {
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(255,255,255,0.2)',
+        borderTopWidth: 2,
+        borderTopColor: 'rgba(255,255,255,0.3)',
+        backgroundColor: 'rgba(255,255,255,0.05)',
     },
     myRankFooter: {
         flexDirection: 'row',

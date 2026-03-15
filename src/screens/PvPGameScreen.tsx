@@ -1,16 +1,27 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View, Dimensions, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
+import ReAnimated, {
+    useSharedValue,
+    useAnimatedStyle,
+    withRepeat,
+    withSequence,
+    withTiming,
+    cancelAnimation,
+} from 'react-native-reanimated';
 import { CathedralBackground } from '../components/CathedralBackground';
 import { BoardView } from '../components/BoardView';
 import { BlockPicker } from '../components/BlockPicker';
 import { GameOverOverlay } from '../components/GameOverOverlay';
+import { ComboPopup } from '../components/ComboPopup';
+import { PerfectClearCelebration } from '../components/PerfectClearCelebration';
 import { useOnlinePvPStore } from '../store/onlinePvPStore';
 import { useUserStore } from '../store/userStore';
 import { playGongSound } from '../utils/sounds';
 import { useGameStore } from '../store/gameStore';
 import { usePvPAppStateGuard } from '../hooks/useAppStateListener';
+import { hapticLight } from '../utils/haptics';
 
 const { width } = Dimensions.get('window');
 
@@ -20,6 +31,10 @@ export function PvPGameScreen({ navigation }: any) {
     const gameStore = useGameStore();
     const timerAnim = useRef(new Animated.Value(1)).current;
     const myUid = useUserStore(s => s.uid);
+
+    // Timer pulse (Reanimated) — visual urgency when <= 5s
+    const timerPulseScale = useSharedValue(1);
+    const timerPulseBorder = useSharedValue(0);
 
     // Reset ONLY on UNMOUNT (Exit)
     useEffect(() => {
@@ -39,7 +54,7 @@ export function PvPGameScreen({ navigation }: any) {
         return () => clearInterval(interval);
     }, [store.status, store.isGameOver]);
 
-    // SFX/UI for Timer
+    // SFX/UI for Timer (legacy Animated opacity)
     useEffect(() => {
         if (store.timeLeft <= 5 && store.timeLeft > 0) {
             Animated.sequence([
@@ -48,6 +63,41 @@ export function PvPGameScreen({ navigation }: any) {
             ]).start();
         }
     }, [store.timeLeft]);
+
+    // Timer Pulse — Reanimated scale pulse + haptic heartbeat (NO SOUND)
+    useEffect(() => {
+        if (store.timeLeft <= 5 && store.timeLeft > 0 && !store.isGameOver) {
+            // Reanimated scale pulse (1 → 1.2 → 1 spring)
+            timerPulseScale.value = withSequence(
+                withTiming(1.25, { duration: 150 }),
+                withTiming(1, { duration: 300 })
+            );
+            timerPulseBorder.value = withSequence(
+                withTiming(1, { duration: 100 }),
+                withTiming(0, { duration: 400 })
+            );
+
+            // Haptic heartbeat — double tap pattern (NO SOUND - Producer's absolute rule)
+            hapticLight();
+            const secondBeat = setTimeout(() => hapticLight(), 150);
+            return () => clearTimeout(secondBeat);
+        } else {
+            timerPulseScale.value = 1;
+            timerPulseBorder.value = 0;
+        }
+    }, [store.timeLeft, store.isGameOver]);
+
+    // Reanimated animated styles for timer pulse
+    const timerPulseStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: timerPulseScale.value }],
+    }));
+
+    const timerBorderStyle = useAnimatedStyle(() => ({
+        borderColor: timerPulseBorder.value > 0.5
+            ? 'rgba(255, 75, 43, 0.9)'
+            : 'rgba(255,255,255,0.2)',
+        borderWidth: 2 + timerPulseBorder.value * 2,
+    }));
 
     // GameOver Handling
     // NOTE: Rating update is now handled server-side by Cloud Functions.
@@ -71,13 +121,17 @@ export function PvPGameScreen({ navigation }: any) {
             }
         },
         () => {
-            // フォアグラウンド復帰 → tickTimer が次の 500ms で状態を自動再評価
-            console.log('[AppState/Resume] Returned to foreground. Timer will re-evaluate.');
+            // フォアグラウンド復帰 → ロック解除 + Firebase再同期
+            const pvp = useOnlinePvPStore.getState();
+            useOnlinePvPStore.setState({ isProcessingPlacement: false });
+            pvp.forceResync();
+            console.log('[AppState/Resume] Locks cleared, forcing resync.');
         }
     );
 
     // Phase 22: Strict Initialization Guard (LATCHED - once true, stays true)
     const hasBeenReady = useRef(false);
+    const [, forceUpdate] = useState(0);
 
     const localBlocksCount = gameStore.currentBlocks?.filter(b => b !== null).length || 0;
 
@@ -90,6 +144,19 @@ export function PvPGameScreen({ navigation }: any) {
         hasBeenReady.current = true;
     }
 
+    // Failsafe: 5秒経過でINITIALIZING画面を強制解除
+    useEffect(() => {
+        if (hasBeenReady.current) return;
+        const failsafe = setTimeout(() => {
+            if (!hasBeenReady.current) {
+                hasBeenReady.current = true;
+                forceUpdate(n => n + 1);
+                console.warn('[PvP/Failsafe] 5s elapsed. Forcing INITIALIZING screen dismiss.');
+            }
+        }, 5000);
+        return () => clearTimeout(failsafe);
+    }, []);
+
     // Latch: Once the game screen is shown, NEVER revert to INITIALIZING
     // (blocks naturally become null during placement - that's expected)
     const isReady = hasBeenReady.current;
@@ -99,8 +166,8 @@ export function PvPGameScreen({ navigation }: any) {
             <View style={styles.container}>
                 <CathedralBackground />
                 <BlurView intensity={100} tint="dark" style={styles.syncingOverlay}>
-                    <Animated.Text style={styles.syncingText}>INITIALIZING...</Animated.Text>
-                    <Text style={styles.syncingSub}>Synchronizing game engine state</Text>
+                    <Animated.Text style={styles.syncingText} accessibilityRole="text" accessibilityLabel="Initializing game">INITIALIZING...</Animated.Text>
+                    <Text style={styles.syncingSub} accessibilityRole="text">Synchronizing game engine state</Text>
                 </BlurView>
             </View>
         );
@@ -118,7 +185,11 @@ export function PvPGameScreen({ navigation }: any) {
                 {/* Versus Header / HUD */}
                 <View style={styles.vsHeader}>
                     {/* Player 1 (Left) */}
-                    <View style={[styles.playerInfo, { alignItems: 'flex-start' }]}>
+                    <View
+                        style={[styles.playerInfo, { alignItems: 'flex-start' }]}
+                        accessibilityLabel={`Player 1: ${store.player1?.name || "HOST"}, rating ${store.player1?.rate || 1500}${store.currentTurn === store.player1?.uid ? ', current turn' : ''}`}
+                        accessibilityRole="text"
+                    >
                         <View style={[styles.avatarGlow, { backgroundColor: store.currentTurn === store.player1?.uid ? '#4DA8DA' : 'rgba(255,255,255,0.05)' }]} />
                         <Text style={[styles.userName, store.currentTurn === store.player1?.uid && { color: '#4DA8DA' }]} numberOfLines={1}>
                             {store.player1?.name || "HOST"}
@@ -126,16 +197,22 @@ export function PvPGameScreen({ navigation }: any) {
                         <Text style={styles.ratingText}>{store.player1?.rate || 1500}</Text>
                     </View>
 
-                    {/* VS Indicator & Timer */}
-                    <View style={styles.vsCenter}>
-                        <Text style={styles.vsText}>VS</Text>
-                        <Animated.View style={[styles.timerCircle, { opacity: timerAnim, borderColor: store.timeLeft <= 5 ? '#FF4B2B' : 'rgba(255,255,255,0.2)' }]}>
-                            <Text style={[styles.timerTextMain, store.timeLeft <= 5 && { color: '#FF4B2B' }]}>{store.timeLeft}</Text>
-                        </Animated.View>
+                    {/* VS Indicator & Timer — Reanimated pulse when <= 5s */}
+                    <View style={styles.vsCenter} accessibilityLabel={`Timer: ${store.timeLeft} seconds remaining`} accessibilityRole="timer">
+                        <Text style={styles.vsText} accessibilityRole="text">VS</Text>
+                        <ReAnimated.View style={[timerPulseStyle]}>
+                            <Animated.View style={[styles.timerCircle, { opacity: timerAnim, borderColor: store.timeLeft <= 5 ? '#FF4B2B' : 'rgba(255,255,255,0.2)' }]}>
+                                <Text style={[styles.timerTextMain, store.timeLeft <= 5 && { color: '#FF4B2B' }]}>{store.timeLeft}</Text>
+                            </Animated.View>
+                        </ReAnimated.View>
                     </View>
 
                     {/* Player 2 (Right) */}
-                    <View style={[styles.playerInfo, { alignItems: 'flex-end' }]}>
+                    <View
+                        style={[styles.playerInfo, { alignItems: 'flex-end' }]}
+                        accessibilityLabel={`Player 2: ${store.player2?.name || "GUEST"}, rating ${store.player2?.rate || 1500}${store.currentTurn === store.player2?.uid ? ', current turn' : ''}`}
+                        accessibilityRole="text"
+                    >
                         <View style={[styles.avatarGlow, { backgroundColor: store.currentTurn === store.player2?.uid ? '#E94560' : 'rgba(255,255,255,0.05)' }]} />
                         <Text style={[styles.userName, store.currentTurn === store.player2?.uid && { color: '#E94560' }]} numberOfLines={1}>
                             {store.player2?.name || "GUEST"}
@@ -157,11 +234,12 @@ export function PvPGameScreen({ navigation }: any) {
 
                 {/* Shared Board */}
                 <View style={styles.boardContainer}>
+                    <ComboPopup />
                     <BoardView isPvP={true} />
 
                     {!isMyTurn && !store.isGameOver && (
                         <BlurView intensity={30} tint="dark" style={styles.waitingOverlay} pointerEvents="none">
-                            <Text style={styles.waitingText}>OPPONENT IS THINKING...</Text>
+                            <Text style={styles.waitingText} accessibilityRole="text" accessibilityLabel="Waiting for opponent's turn">OPPONENT IS THINKING...</Text>
                         </BlurView>
                     )}
                 </View>
@@ -184,13 +262,15 @@ export function PvPGameScreen({ navigation }: any) {
                     />
                 )}
 
+                <PerfectClearCelebration />
+
                 {/* Sync Overlay (Phase 20) */}
                 {(store.status === 'matching' || !isReady) && !store.isGameOver && (
                     <BlurView intensity={100} tint="dark" style={[styles.syncingOverlay, { pointerEvents: 'none' }]}>
-                        <Animated.Text style={[styles.syncingText, { opacity: timerAnim }]}>
+                        <Animated.Text style={[styles.syncingText, { opacity: timerAnim }]} accessibilityRole="text" accessibilityLabel="Synchronizing battle">
                             SYNCHRONIZING BATTLE...
                         </Animated.Text>
-                        <Text style={styles.syncingSub}>Waiting for board synchronization</Text>
+                        <Text style={styles.syncingSub} accessibilityRole="text">Waiting for board synchronization</Text>
                     </BlurView>
                 )}
             </SafeAreaView>

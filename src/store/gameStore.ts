@@ -10,7 +10,8 @@ import {
     findCellsToClear,
     canPlace,
 } from '../game/board';
-import { generateBlocks } from '../game/survivalAlgorithm';
+import { generateBlocks, generateBlocksAsync } from '../game/survivalAlgorithm';
+import { ALL_BLOCKS } from '../game/blocks';
 import { playBGM } from '../utils/sounds';
 import { useUserStore } from './userStore';
 import { apiService } from '../services/apiService';
@@ -54,7 +55,8 @@ interface GameStore extends GameState {
     finishClear: () => void;
     resetPerfectClear: () => void;
     triggerBGM: () => void;
-    resetTurnState: (blocks: (BlockShape | null)[]) => void;
+    setGameOver: (isGameOver: boolean) => void;
+    resetTurnState: (blocks: (BlockShape | null)[], board?: Board) => void;
 }
 
 function makeInitialState() {
@@ -94,17 +96,7 @@ function checkGameOverState(
 
     if (unplacedIndices.length === 0) return false; // All placed or null
 
-    const isGameOver = unplacedIndices.every(idx => !hasAnyValidPlacement(board, blocks[idx] as BlockShape));
-
-    if (isGameOver) {
-        console.log('[GameOver Audit] Survival Impossible Check (PvP Optimized):');
-        unplacedIndices.forEach(idx => {
-            const b = blocks[idx] as BlockShape;
-            console.log(` - Block [${b.id}] (${b.color}): No valid placements found on 8x8 board.`);
-        });
-    }
-
-    return isGameOver;
+    return unplacedIndices.every(idx => !hasAnyValidPlacement(board, blocks[idx] as BlockShape));
 }
 
 export const useGameStore = create<GameStore>()(subscribeWithSelector((set, get) => ({
@@ -179,115 +171,78 @@ export const useGameStore = create<GameStore>()(subscribeWithSelector((set, get)
         });
     },
 
-    // Phase 1: Place block, detect lines, set clearingCells if any
-    placeBlock: (blockIndex, row, col) =>
-        set((state) => {
-            const shape = state.currentBlocks[blockIndex];
-            if (!shape || !canPlace(state.board, shape, row, col)) {
-                console.warn(`[StoreSafety] Blocking invalid placeBlock in gameStore at (${row}, ${col})`);
-                return state;
-            }
-            const newBoard = placeBlockFn(state.board, shape, row, col);
-            console.log(`[StoreDebug] placeBlock executed for block ${blockIndex} at (${row}, ${col}). Board updated.`);
-            const newFlags = [...state.placedFlags];
-            newFlags[blockIndex] = true;
+    // ─── placeBlock: VFX最優先 + DFS非同期化 ───────────────
+    // generateBlocks (DFS) は同期 set() の外に追い出し、
+    // JSスレッドを即座にReactレンダーに返す。
+    placeBlock: (blockIndex, row, col) => {
+        const state = get();
+        const shape = state.currentBlocks[blockIndex];
+        if (!shape || !canPlace(state.board, shape, row, col)) return;
 
-            // Increment move count for sequence tracking (Phase 21)
-            const nextMoveCount = state.isPvP ? state.lastAppliedMoveCount + 1 : state.lastAppliedMoveCount;
+        const newBoard = placeBlockFn(state.board, shape, row, col);
+        const newFlags = [...state.placedFlags];
+        newFlags[blockIndex] = true;
+        const nextMoveCount = state.isPvP ? state.lastAppliedMoveCount + 1 : state.lastAppliedMoveCount;
+        const cells = findCellsToClear(newBoard);
+        const placementScore = (shape.cells.length * 5) + 10;
 
-            // Check for lines to clear
-            const cells = findCellsToClear(newBoard);
+        // ─── Line Clear Path: VFX即発火 ─────────────────
+        if (cells.length > 0) {
+            const clearResult = clearLines(newBoard);
+            const { linesCleared, isHorizontal, isVertical, newBoard: boardAfterClear } = clearResult;
+            const newCombo = state.comboCount + 1;
+            const isCross = isHorizontal && isVertical;
 
-            const placementScore = (shape.cells.length * 5) + 10;
+            let multiplier = 1.0;
+            if (newCombo === 2) multiplier = 1.5;
+            else if (newCombo === 3) multiplier = 2.0;
+            else if (newCombo === 4) multiplier = 3.0;
+            else if (newCombo >= 5) multiplier = 4.0;
 
-            if (cells.length > 0) {
-                // Determine lines cleared and calculate score (single call)
-                const clearResult = clearLines(newBoard);
-                const { linesCleared, isHorizontal, isVertical, newBoard: boardAfterClear } = clearResult;
-                const newCombo = state.comboCount + 1;
-                const isCross = isHorizontal && isVertical;
+            let clearEarned = getScore(linesCleared) * multiplier;
+            if (isCross) clearEarned *= 2.0;
+            const earned = placementScore + clearEarned;
+            const willBePerfect = boardAfterClear.every(r => r.every(cell => cell === 0));
 
-                // --- Progressive Multiplier Logic ---
-                // 1: 1.0x, 2: 1.5x, 3: 2.0x, 4: 3.0x, 5+: 4.0x
-                let multiplier = 1.0;
-                if (newCombo === 2) multiplier = 1.5;
-                else if (newCombo === 3) multiplier = 2.0;
-                else if (newCombo === 4) multiplier = 3.0;
-                else if (newCombo >= 5) multiplier = 4.0;
+            // 同期 set: clearingCells をセットして即座にVFX描画へ
+            set({
+                board: newBoard,
+                placedFlags: newFlags,
+                clearingCells: cells,
+                preview: null,
+                comboCount: newCombo,
+                scoreEarned: Math.floor(earned),
+                showPerfectClear: false,
+                lastLinesCleared: linesCleared,
+                isCrossClear: isCross,
+                isPendingPerfect: willBePerfect,
+                lastAppliedMoveCount: nextMoveCount,
+            });
+            return; // ← JSスレッドを即解放。generateBlocks は走らない。
+        }
 
-                // Base score boost (1000 per line = score(linesCleared) is a helper but let's assume its existing logic)
-                let clearEarned = getScore(linesCleared) * multiplier;
+        // ─── No Clear Path ──────────────────────────────
+        const totalScore = state.score + placementScore;
+        const nextMoves = state.movesSinceLastClear + 1;
+        let nextCombo = state.comboCount;
+        if (nextMoves > 3 && !state.isPerfectBonusTime) nextCombo = 0;
 
-                // CROSS CLEAR Bonus: 2.0x buff
-                if (isCross) clearEarned *= 2.0;
+        const nextBlocks = [...state.currentBlocks];
+        nextBlocks[blockIndex] = null;
+        const allPlaced = newFlags.every(f => f);
 
-                const earned = placementScore + clearEarned;
+        const userStore = useUserStore.getState();
+        if (totalScore > userStore.highScore) userStore.updateHighScore(totalScore);
 
-                // Check perfect clear using already-computed cleared board
-                const willBePerfect = boardAfterClear.every(row => row.every(cell => cell === 0));
-
-                return {
-                    ...state,
-                    board: newBoard,
-                    placedFlags: newFlags,
-                    clearingCells: cells,
-                    preview: null,
-                    comboCount: newCombo,
-                    scoreEarned: Math.floor(earned),
-                    showPerfectClear: false,
-                    lastLinesCleared: linesCleared,
-                    isCrossClear: isCross,
-                    isPendingPerfect: willBePerfect,
-                    lastAppliedMoveCount: nextMoveCount,
-                };
-            }
-
-            // No lines → proceed immediately (Add placement score to total score)
-            const allPlaced = newFlags.every((f) => f);
-            const totalScore = state.score + placementScore;
-            const nextMoves = state.movesSinceLastClear + 1;
-            let nextCombo = state.comboCount;
-            if (nextMoves > 3 && !state.isPerfectBonusTime) {
-                nextCombo = 0;
-            }
-
-            const nextBlocks = [...state.currentBlocks];
-            nextBlocks[blockIndex] = null;
-            let nextFlags = newFlags;
-
-            if (allPlaced && !state.isPvP) {
-                const refilled = generateBlocks(newBoard, state.perfectClearCount, state.hospitalityEndTarget);
-                return {
-                    ...state,
-                    board: newBoard,
-                    score: totalScore,
-                    comboCount: nextCombo,
-                    movesSinceLastClear: nextMoves,
-                    currentBlocks: refilled as (BlockShape | null)[],
-                    placedFlags: [false, false, false],
-                    isGameOver: checkGameOverState(newBoard, refilled, [false, false, false]),
-                };
-            }
-
-            // CRITICAL: Check game over AFTER refill/reset if it happened
-            const filteredBlocks = (nextBlocks.filter(b => b !== null) as BlockShape[]);
-            // CRITICAL: Check game over AFTER refill/reset if it happened
-            const gameOver = checkGameOverState(newBoard, nextBlocks, nextFlags);
-
-            const userStore = useUserStore.getState();
-            if (totalScore > userStore.highScore) {
-                userStore.updateHighScore(totalScore);
-            }
-
-            return {
-                ...state,
+        if (allPlaced && !state.isPvP) {
+            // ─── Phase 1: 即座にステート更新（DFS なし）────
+            set({
                 board: newBoard,
                 score: totalScore,
                 comboCount: nextCombo,
                 movesSinceLastClear: nextMoves,
-                currentBlocks: nextBlocks,
-                placedFlags: nextFlags,
-                isGameOver: gameOver,
+                currentBlocks: [null, null, null],
+                placedFlags: [true, true, true],
                 clearingCells: null,
                 scoreEarned: null,
                 preview: null,
@@ -296,70 +251,125 @@ export const useGameStore = create<GameStore>()(subscribeWithSelector((set, get)
                 isCrossClear: false,
                 isPendingPerfect: false,
                 lastAppliedMoveCount: nextMoveCount,
-            };
-        }),
+            });
 
-    // Phase 2: Called after clear animation finishes
-    finishClear: () =>
-        set((state) => {
-            if (!state.clearingCells || state.scoreEarned === null) return state;
+            // ─── Phase 2: DFS を非同期実行（JSスレッド解放後）────
+            const pcCount = state.perfectClearCount;
+            const hetTarget = state.hospitalityEndTarget;
+            setTimeout(async () => {
+                const refilled = await generateBlocksAsync(newBoard, pcCount, hetTarget, ALL_BLOCKS, totalScore);
+                set({
+                    currentBlocks: refilled as (BlockShape | null)[],
+                    placedFlags: [false, false, false],
+                    isGameOver: checkGameOverState(newBoard, refilled, [false, false, false]),
+                });
+            }, 0);
+            return;
+        }
 
-            const { newBoard } = clearLines(state.board);
-            const newScore = state.score + state.scoreEarned;
-            const userStore = useUserStore.getState();
+        // ─── Not All Placed: 通常パス ───────────────────
+        const gameOver = state.isPvP ? false : checkGameOverState(newBoard, nextBlocks, newFlags);
+        set({
+            board: newBoard,
+            score: totalScore,
+            comboCount: nextCombo,
+            movesSinceLastClear: nextMoves,
+            currentBlocks: nextBlocks,
+            placedFlags: newFlags,
+            isGameOver: gameOver,
+            clearingCells: null,
+            scoreEarned: null,
+            preview: null,
+            showPerfectClear: false,
+            lastLinesCleared: 0,
+            isCrossClear: false,
+            isPendingPerfect: false,
+            lastAppliedMoveCount: nextMoveCount,
+        });
+    },
 
-            if (newScore > userStore.highScore) {
-                userStore.updateHighScore(newScore);
-            }
+    // ─── finishClear: DFS非同期化 ──────────────────────────
+    // VFXアニメーション完了後に呼ばれる。
+    // ボード更新は即座に、generateBlocks は非同期で実行。
+    finishClear: () => {
+        const state = get();
+        if (!state.clearingCells || state.scoreEarned === null) return;
 
-            const allPlaced = state.placedFlags.every((f) => f);
-            let nextBlocks = [...state.currentBlocks];
-            let nextFlags = [...state.placedFlags];
+        const { newBoard } = clearLines(state.board);
+        const newScore = state.score + state.scoreEarned;
+        const userStore = useUserStore.getState();
+        if (newScore > userStore.highScore) userStore.updateHighScore(newScore);
 
-            const isPerfect = newBoard.every(row => row.every(cell => cell === 0));
-            const newPcCount = isPerfect ? state.perfectClearCount + 1 : state.perfectClearCount;
+        const isPerfect = newBoard.every(r => r.every(cell => cell === 0));
+        const newPcCount = isPerfect ? state.perfectClearCount + 1 : state.perfectClearCount;
+        if (isPerfect) state.resetPerfectClear();
 
-            if (isPerfect) {
-                state.resetPerfectClear();
-            }
+        const allPlaced = state.placedFlags.every(f => f);
 
-            if (allPlaced && !state.isPvP) {
-                const refilled = generateBlocks(newBoard, newPcCount, state.hospitalityEndTarget);
-                nextBlocks = refilled as (BlockShape | null)[];
-                nextFlags = [false, false, false];
-            }
-
-            // CRITICAL: Check game over AFTER refill/reset if it happened
-            const filteredBlocks = (nextBlocks.filter(b => b !== null) as BlockShape[]);
-            // CRITICAL: Check game over AFTER refill/reset if it happened
-            const gameOver = checkGameOverState(newBoard, nextBlocks, nextFlags);
-
-            return {
-                ...state,
+        if (allPlaced && !state.isPvP) {
+            // ─── Phase 1: 即座にボード更新 + VFXステートクリア ───
+            set({
                 board: newBoard,
                 score: newScore,
-                currentBlocks: nextBlocks,
-                placedFlags: nextFlags,
-                isGameOver: gameOver,
+                currentBlocks: [null, null, null],
+                placedFlags: [true, true, true],
                 clearingCells: null,
                 scoreEarned: null,
                 showPerfectClear: isPerfect,
-                movesSinceLastClear: 0, // Reset moves on clearing lines
-                isPerfectBonusTime: isPerfect ? true : false, // Reset bonus time unless we just hit another perfect
+                movesSinceLastClear: 0,
+                isPerfectBonusTime: isPerfect,
                 perfectClearCount: newPcCount,
-                lastLinesCleared: 0, // Reset after processing in view
-                isCrossClear: false, // Reset
+                lastLinesCleared: 0,
+                isCrossClear: false,
                 isPendingPerfect: false,
-            };
-        }),
+            });
+
+            // ─── Phase 2: DFS を非同期実行 ────────────────
+            const hetTarget = state.hospitalityEndTarget;
+            setTimeout(async () => {
+                const refilled = await generateBlocksAsync(newBoard, newPcCount, hetTarget, ALL_BLOCKS, newScore);
+                set({
+                    currentBlocks: refilled as (BlockShape | null)[],
+                    placedFlags: [false, false, false],
+                    isGameOver: checkGameOverState(newBoard, refilled, [false, false, false]),
+                });
+            }, 0);
+            return;
+        }
+
+        // ─── Not All Placed: 通常パス ───────────────────
+        const nextBlocks = [...state.currentBlocks];
+        const nextFlags = [...state.placedFlags];
+        const gameOver = state.isPvP ? false : checkGameOverState(newBoard, nextBlocks, nextFlags);
+
+        set({
+            board: newBoard,
+            score: newScore,
+            currentBlocks: nextBlocks,
+            placedFlags: nextFlags,
+            isGameOver: gameOver,
+            clearingCells: null,
+            scoreEarned: null,
+            showPerfectClear: isPerfect,
+            movesSinceLastClear: 0,
+            isPerfectBonusTime: isPerfect,
+            perfectClearCount: newPcCount,
+            lastLinesCleared: 0,
+            isCrossClear: false,
+            isPendingPerfect: false,
+        });
+    },
     // Auto-hide helper
     resetPerfectClear: () => {
         if (perfectClearTimer) clearTimeout(perfectClearTimer);
         perfectClearTimer = setTimeout(() => { set({ showPerfectClear: false }); perfectClearTimer = null; }, 2000);
     },
 
-    resetTurnState: (blocks) => {
+    setGameOver: (v) => set({ isGameOver: v }),
+
+    resetTurnState: (blocks, board) => {
         const safeBlocks = Array.isArray(blocks) ? blocks : (blocks ? Object.values(blocks) : []);
+        const boardToUse = board || get().board;
         set({
             currentBlocks: safeBlocks as (BlockShape | null)[],
             lastAppliedMoveCount: 0,
@@ -367,8 +377,7 @@ export const useGameStore = create<GameStore>()(subscribeWithSelector((set, get)
             clearingCells: null,
             scoreEarned: null,
             showPerfectClear: false,
-            isGameOver: checkGameOverState(get().board, safeBlocks as (BlockShape | null)[], safeBlocks.map(b => b === null))
+            isGameOver: get().isPvP ? false : checkGameOverState(boardToUse, safeBlocks as (BlockShape | null)[], safeBlocks.map(b => b === null))
         });
-        console.log(`[gameStore] Turn state explicitly reset. Blocks: ${safeBlocks.filter(b => b !== null).length}`);
     }
 })));
