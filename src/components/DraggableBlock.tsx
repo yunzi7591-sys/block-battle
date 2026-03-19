@@ -91,8 +91,9 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
         if (!bl || !currentBoard || !currentBlock) return null;
 
         // 1. CONVERT TOP-LEFT TO BOARD-RELATIVE COORDINATES
-        const relativeX = visualTopLeftX - bl.x;
-        const relativeY = visualTopLeftY - bl.y;
+        //    ★ BOARD_PADDINGを減算してグリッド原点に合わせる
+        const relativeX = visualTopLeftX - bl.x - BOARD_PADDING;
+        const relativeY = visualTopLeftY - bl.y - BOARD_PADDING;
 
         // 2. MAP TO GRID INDICES (Top-Left based)
         const gridCol = Math.round(relativeX / bl.cellSize);
@@ -322,8 +323,8 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                             style={[
                                 styles.absoluteCell,
                                 {
-                                    left: cIdx * renderCellSize + BLOCK_PADDING,
-                                    top: rIdx * renderCellSize + BLOCK_PADDING,
+                                    left: cIdx * renderCellSize,
+                                    top: rIdx * renderCellSize,
                                     width: renderCellSize,
                                     height: renderCellSize,
                                 },

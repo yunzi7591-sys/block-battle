@@ -3,9 +3,9 @@
  *
  * Responsibilities split into:
  * - pvp/pvpTypes.ts        — Type definitions
- * - pvp/pvpConnection.ts   — Room creation, joining, matchmaking
+ * - pvp/pvpConnection.ts   — Room creation, joining, matchmaking, AI fallback
  * - pvp/pvpListenerSync.ts — Firebase room data synchronization
- * - pvp/pvpGameActions.ts  — placeBlockSync, tickTimer, reportDefeat
+ * - pvp/pvpGameActions.ts  — placeBlockSync, tickTimer, reportDefeat, processAITurn
  */
 
 import { create } from 'zustand';
@@ -17,7 +17,7 @@ import { OnlinePvPState } from './pvp/pvpTypes';
 
 // Import action creators from split modules
 import { createCreateRoom, createJoinRoom, createStartAutoMatch, createCancelAutoMatch, createReset } from './pvp/pvpConnection';
-import { createPlaceBlockSync, createTickTimer, createReportDefeat, createCalculateRatingChange, createForceResync } from './pvp/pvpGameActions';
+import { createPlaceBlockSync, createTickTimer, createReportDefeat, createCalculateRatingChange, createForceResync, createProcessAITurn } from './pvp/pvpGameActions';
 
 export const useOnlinePvPStore = create<OnlinePvPState>()(subscribeWithSelector((set, get) => ({
     // ─── Initial State ────────────────────────────────────
@@ -56,6 +56,10 @@ export const useOnlinePvPStore = create<OnlinePvPState>()(subscribeWithSelector(
     lastTimeoutReportTime: 0,
     ratingApplied: false,
 
+    // ─── AI Match State ───────────────────────────────────
+    isAIMatch: false,
+    aiUid: null,
+
     // ─── Connection Actions (from pvpConnection.ts) ──────
     createRoom: createCreateRoom(set, get),
     joinRoom: createJoinRoom(set, get),
@@ -69,6 +73,7 @@ export const useOnlinePvPStore = create<OnlinePvPState>()(subscribeWithSelector(
     reportDefeat: createReportDefeat(set, get),
     forceResync: createForceResync(set, get),
     calculateRatingChange: createCalculateRatingChange(get),
+    processAITurn: createProcessAITurn(set, get),
 
     // ─── Simple Actions ─────────────────────────────────
     setBoardLayout: (layout) => set({ boardLayout: layout }),

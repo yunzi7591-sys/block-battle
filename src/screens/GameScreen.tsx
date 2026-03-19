@@ -9,12 +9,14 @@ import { BlockPicker } from '../components/BlockPicker';
 import { ComboPopup } from '../components/ComboPopup';
 import { PerfectClearCelebration } from '../components/PerfectClearCelebration';
 import { playGongSound, playDecisionSound } from '../utils/sounds';
+import { useInterstitialAd } from '../hooks/useInterstitialAd';
 
 export function GameScreen({ navigation }: any) {
     const score = useGameStore((s) => s.score);
     const isGameOver = useGameStore((s) => s.isGameOver);
     const init = useGameStore((s) => s.init);
     const triggerBGM = useGameStore((s) => s.triggerBGM);
+    const { showAdThen } = useInterstitialAd();
 
     const scoreScale = useRef(new Animated.Value(1)).current;
 
@@ -36,10 +38,10 @@ export function GameScreen({ navigation }: any) {
         if (isGameOver) {
             playGongSound();
             Alert.alert('Game Over', `Score: ${score}`, [
-                { text: 'Restart', onPress: init },
+                { text: 'Restart', onPress: () => showAdThen(init) },
             ]);
         }
-    }, [isGameOver, score, init]);
+    }, [isGameOver, score, init, showAdThen]);
 
     const handleBack = () => {
         playDecisionSound();
@@ -48,7 +50,7 @@ export function GameScreen({ navigation }: any) {
 
     const handleRestart = () => {
         playDecisionSound();
-        init();
+        showAdThen(init);
     };
 
     return (

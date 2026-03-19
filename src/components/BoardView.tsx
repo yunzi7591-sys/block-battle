@@ -334,20 +334,7 @@ export function BoardView({ isPvP }: { isPvP?: boolean }) {
     useEffect(() => {
         if (activeClearingCells && activeClearingCells.length > 0) {
             hapticHeavy();
-            // Screen shake
-            const intensity = comboCount >= 3 ? 6 : comboCount >= 2 ? 4 : 2.5;
-            shakeX.value = withSequence(
-                withTiming(intensity, { duration: 30 }),
-                withTiming(-intensity, { duration: 30 }),
-                withTiming(intensity * 0.6, { duration: 30 }),
-                withTiming(-intensity * 0.6, { duration: 30 }),
-                withTiming(0, { duration: 40 }),
-            );
-            shakeY.value = withSequence(
-                withTiming(-intensity * 0.5, { duration: 30 }),
-                withTiming(intensity * 0.5, { duration: 30 }),
-                withTiming(0, { duration: 40 }),
-            );
+            // Screen shake removed (Producer's request)
             if (isPendingPerfect) playCheerSound(); else playClearSound(comboCount);
             const timer = setTimeout(() => finishClear(), CLEAR_ANIMATION_MS);
             return () => clearTimeout(timer);

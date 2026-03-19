@@ -65,10 +65,12 @@ export interface TierWeights {
 /**
  * Solo用: スコア連動の段階的難易度カーブ（プロデューサー承認版）
  *
- * Phase 1 (0〜5000):      Easy=100%  Medium=0%   Hard=0%    ← 気持ちよさ重視
- * Phase 2 (5000〜10000):   補間 →    Easy=50%   Medium=50%  Hard=0%    ← Mediumが徐々に混入、Hardはまだゼロ
- * Phase 3 (10000〜30000):  補間 →    Easy=20%   Medium=40%  Hard=40%   ← 10000点でHard解禁、徐々に極悪化
- * Phase 4 (30000+):        Easy=20%  Medium=40%  Hard=40%   ← カンスト固定
+ * Phase 1 (0〜5000):        Easy=100%  Medium=0%   Hard=0%    ← 気持ちよさ重視
+ * Phase 2 (5000〜10000):    補間 →     Easy=50%   Medium=50%  Hard=0%    ← Mediumが徐々に混入
+ * Phase 3 (10000〜30000):   補間 →     Easy=20%   Medium=40%  Hard=40%   ← Hard解禁、徐々に極悪化
+ * Phase 4 (30000〜100000):  Easy=20%   Medium=40%  Hard=40%   ← 安定期
+ * Phase 5 (100000〜200000): 補間 →     Easy=5%    Medium=25%  Hard=70%   ← 10万点突破で地獄化
+ * Phase 6 (200000+):        Easy=5%    Medium=20%  Hard=75%   ← 極限カンスト
  */
 export function getSoloTierWeights(score: number): TierWeights {
     // Phase 1: 序盤 — Easy のみ
@@ -93,8 +95,21 @@ export function getSoloTierWeights(score: number): TierWeights {
             hard:   0.00 + t * 0.40,  // 0.00 → 0.40
         };
     }
-    // Phase 4: カンスト
-    return { easy: 0.20, medium: 0.40, hard: 0.40 };
+    // Phase 4: 安定期
+    if (score <= 100000) {
+        return { easy: 0.20, medium: 0.40, hard: 0.40 };
+    }
+    // Phase 5: 10万点突破 — Hard大幅増加、Easy激減
+    if (score <= 200000) {
+        const t = (score - 100000) / 100000; // 0.0 → 1.0
+        return {
+            easy:   0.20 - t * 0.15,  // 0.20 → 0.05
+            medium: 0.40 - t * 0.15,  // 0.40 → 0.25
+            hard:   0.40 + t * 0.30,  // 0.40 → 0.70
+        };
+    }
+    // Phase 6: 極限カンスト
+    return { easy: 0.05, medium: 0.20, hard: 0.75 };
 }
 
 /**

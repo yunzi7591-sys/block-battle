@@ -391,6 +391,8 @@ export const LobbyService = {
     findPublicRoom: async (): Promise<string | null> => {
         const roomsRef = ref(rtdb, 'rooms');
         const myUid = auth.currentUser?.uid;
+        const now = Date.now();
+        const STALE_THRESHOLD = 60000; // 60秒以上前のルームはスキップ
 
         console.log(`[RTDB/Find] Searching for public rooms... MyUID: ${myUid}`);
 
@@ -403,15 +405,34 @@ export const LobbyService = {
             const roomIds = Object.keys(rooms);
             console.log(`[RTDB/Find] Found ${roomIds.length} waiting rooms.`);
 
-            const validRoomId = roomIds.find(key => {
-                const room = rooms[key];
-                return !room.isPrivate && room.player1.uid !== myUid;
+            // ★ createdAtが新しい順にソート（新しいルームを優先）+ ゾンビルーム自動削除
+            const staleRoomIds: string[] = [];
+            const validRoomIds = roomIds
+                .filter(key => {
+                    const room = rooms[key];
+                    if (room.isPrivate) return false;
+                    if (room.player1.uid === myUid) return false;
+                    if (room.player2) return false; // 既にplayer2がいるルームをスキップ
+                    // ★ 古すぎるルームをスキップ（ゾンビルーム対策）
+                    if (room.createdAt && (now - room.createdAt) > STALE_THRESHOLD) {
+                        console.log(`[RTDB/Find] Skipping stale room ${key} (age: ${Math.round((now - room.createdAt) / 1000)}s)`);
+                        staleRoomIds.push(key);
+                        return false;
+                    }
+                    return true;
+                })
+                .sort((a, b) => (rooms[b].createdAt || 0) - (rooms[a].createdAt || 0));
+
+            // ★ ゾンビルームをバックグラウンドで削除（await不要）
+            staleRoomIds.forEach(id => {
+                remove(ref(rtdb, `rooms/${id}`)).catch(() => {});
             });
 
-            if (validRoomId) {
-                console.log(`[RTDB/Find] Selected room: ${validRoomId}`);
-                return validRoomId;
+            if (validRoomIds.length > 0) {
+                console.log(`[RTDB/Find] Selected room: ${validRoomIds[0]} (${validRoomIds.length} candidates)`);
+                return validRoomIds[0];
             }
+            console.log(`[RTDB/Find] No valid fresh rooms found (all stale or own).`);
         } else {
             console.log(`[RTDB/Find] No waiting rooms found.`);
         }

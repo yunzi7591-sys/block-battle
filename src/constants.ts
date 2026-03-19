@@ -2,7 +2,7 @@
 export const BOARD_CELL_MARGIN = 2;
 export const BOARD_PADDING = 8;
 export const TRAY_CELL_SIZE = 18;
-export const CLEAR_ANIMATION_MS = 250;
+export const CLEAR_ANIMATION_MS = 120;
 
 // ─── Drag & Drop: Unified Accelerated Model ──────────────
 //
@@ -14,4 +14,4 @@ export const CLEAR_ANIMATION_MS = 250;
 /** Drag acceleration multiplier (both axes). */
 export const DRAG_ACCEL = 1.5;
 /** Y offset to lift block above finger during drag. Negative = upward. */
-export const LIFT_OFFSET = -90;
+export const LIFT_OFFSET = -20;

@@ -41,6 +41,10 @@ export interface OnlinePvPState {
     isRanked: boolean;
     lastOptimisticMoveTime: number;
 
+    // ─── AI Match State ─────────────────────────────────
+    isAIMatch: boolean;
+    aiUid: string | null;
+
     // Actions
     createRoom: (isPrivate?: boolean, isRanked?: boolean) => void;
     joinRoom: (id: string) => Promise<boolean>;
@@ -55,6 +59,7 @@ export interface OnlinePvPState {
     calculateRatingChange: (win: boolean) => number;
     reportDefeat: () => void;
     forceResync: () => void;
+    processAITurn: () => void;
 
     // Internal
     _unsubscribeRoom: (() => void) | null;

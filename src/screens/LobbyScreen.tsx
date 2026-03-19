@@ -102,7 +102,28 @@ export function LobbyScreen({ navigation }: any) {
     };
 
     const [countdown, setCountdown] = useState<number | null>(null);
+    const [matchTimer, setMatchTimer] = useState<number>(30);
     const hasNavigatedRef = useRef(false);
+
+    // ★ マッチング中の20秒カウントダウン
+    useEffect(() => {
+        if (isMatching && !matchingLocked && countdown === null) {
+            setMatchTimer(30);
+            const interval = setInterval(() => {
+                setMatchTimer(prev => {
+                    if (prev <= 1) {
+                        clearInterval(interval);
+                        return 0;
+                    }
+                    return prev - 1;
+                });
+            }, 1000);
+            return () => clearInterval(interval);
+        }
+        if (!isMatching) {
+            setMatchTimer(30);
+        }
+    }, [isMatching, matchingLocked, countdown]);
 
     // Auto-navigate when match starts (with countdown)
     useEffect(() => {
@@ -284,8 +305,11 @@ export function LobbyScreen({ navigation }: any) {
                                 <Animated.Text style={[styles.searchingText, { opacity: searchPulse }]}>
                                     SEARCHING FOR OPPONENT...
                                 </Animated.Text>
-                                <View style={styles.loaderContainer}>
-                                    <View style={styles.pulseDisk} />
+                                <View style={styles.matchTimerContainer}>
+                                    <Text style={styles.matchTimerNumber}>{matchTimer}</Text>
+                                </View>
+                                <View style={styles.matchTimerBarBg}>
+                                    <View style={[styles.matchTimerBarFill, { width: `${(matchTimer / 30) * 100}%` }]} />
                                 </View>
                                 {!matchingLocked && (
                                     <TouchableOpacity
@@ -430,10 +454,36 @@ const styles = StyleSheet.create({
     backBtn: { marginTop: 20 },
     backBtnText: { color: 'rgba(255,255,255,0.5)', fontWeight: '700' },
     matchOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
-    searchingText: { color: '#FFF', fontSize: 20, fontWeight: '900', letterSpacing: 3, marginBottom: 50 },
-    loaderContainer: { width: 100, height: 100, justifyContent: 'center', alignItems: 'center' },
-    pulseDisk: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#4DA8DA', opacity: 0.5 },
-    cancelSearchBtn: { marginTop: 80, paddingHorizontal: 40, paddingVertical: 15, borderRadius: 30, borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
+    searchingText: { color: '#FFF', fontSize: 20, fontWeight: '900', letterSpacing: 3, marginBottom: 30 },
+    matchTimerContainer: {
+        width: 90,
+        height: 90,
+        borderRadius: 45,
+        borderWidth: 2,
+        borderColor: 'rgba(77,168,218,0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 20,
+    },
+    matchTimerNumber: {
+        color: '#4DA8DA',
+        fontSize: 36,
+        fontWeight: '900',
+    },
+    matchTimerBarBg: {
+        width: 200,
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: 'rgba(255,255,255,0.1)',
+        overflow: 'hidden',
+        marginBottom: 10,
+    },
+    matchTimerBarFill: {
+        height: '100%',
+        backgroundColor: '#4DA8DA',
+        borderRadius: 2,
+    },
+    cancelSearchBtn: { marginTop: 50, paddingHorizontal: 40, paddingVertical: 15, borderRadius: 30, borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
     cancelSearchText: { color: '#FFF', fontWeight: '800' },
     foundText: { color: '#4DA8DA', fontSize: 24, fontWeight: '900', marginTop: 80 },
     countdownContainer: {

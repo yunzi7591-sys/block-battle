@@ -5,6 +5,7 @@
  * - Victory: confetti burst (react-native-confetti-cannon), trophy spring, golden glow
  * - Defeat: screen-shake, red vignette, heavy X-icon drop
  * - Rating counter: old→new animated interpolation
+ * - "PLAY AGAIN" button for re-matching
  *
  * All motion runs on the UI thread via react-native-reanimated.
  */
@@ -40,6 +41,7 @@ interface Props {
     oldRating: number;
     newRating: number;
     onExit: () => void;
+    onRematch?: () => void;
 }
 
 // ─── Animated Rating Counter ──────────────────────────────
@@ -70,6 +72,7 @@ export function GameOverOverlay({
     oldRating,
     newRating,
     onExit,
+    onRematch,
 }: Props) {
     const confettiRef = useRef<any>(null);
 
@@ -148,7 +151,7 @@ export function GameOverOverlay({
             );
         }
 
-        // 6. Exit button (1200ms+)
+        // 6. Buttons (1200ms+)
         buttonOpacity.value = withDelay(1200, withTiming(1, { duration: 300 }));
         buttonTranslateY.value = withDelay(1200, withSpring(0, SPRING_SNAPPY));
     }, []);
@@ -284,8 +287,23 @@ export function GameOverOverlay({
                     </Animated.Text>
                 )}
 
-                {/* Exit button */}
-                <Animated.View style={buttonStyle}>
+                {/* Buttons */}
+                <Animated.View style={[styles.buttonRow, buttonStyle]}>
+                    {/* Play Again button */}
+                    {onRematch && (
+                        <AnimatedPressable
+                            style={styles.rematchBtn}
+                            onPress={onRematch}
+                            accessibilityRole="button"
+                            accessibilityLabel="Play Again"
+                            accessibilityHint="Starts searching for a new match"
+                        >
+                            <Ionicons name="refresh" size={18} color="#FFF" style={{ marginRight: 6 }} />
+                            <Text style={styles.rematchBtnText}>PLAY AGAIN</Text>
+                        </AnimatedPressable>
+                    )}
+
+                    {/* Exit button */}
                     <AnimatedPressable
                         style={styles.exitBtn}
                         onPress={onExit}
@@ -373,15 +391,38 @@ const styles = StyleSheet.create({
         letterSpacing: 1,
         marginBottom: 40,
     },
-    exitBtn: {
-        backgroundColor: '#FFF',
+    buttonRow: {
+        alignItems: 'center',
+        gap: 12,
+        width: '100%',
+    },
+    rematchBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#4DA8DA',
         paddingHorizontal: 40,
         paddingVertical: 16,
         borderRadius: 30,
+        width: '75%',
     },
-    exitBtnText: {
-        color: '#000',
+    rematchBtnText: {
+        color: '#FFF',
         fontWeight: '800',
         fontSize: 14,
+        letterSpacing: 1,
+    },
+    exitBtn: {
+        backgroundColor: 'rgba(255,255,255,0.15)',
+        paddingHorizontal: 40,
+        paddingVertical: 14,
+        borderRadius: 30,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.2)',
+    },
+    exitBtnText: {
+        color: 'rgba(255,255,255,0.7)',
+        fontWeight: '800',
+        fontSize: 13,
     },
 });

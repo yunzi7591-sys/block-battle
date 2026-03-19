@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Block Battle",
-    "slug": "block-battle",
+    "slug": "block-battle-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -14,7 +14,19 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.blockbattle.app",
-      "buildNumber": "1"
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSUserTrackingUsageDescription": "この識別子は、お客様にパーソナライズされた広告を提供するために使用されます。",
+        "SKAdNetworkItems": [
+          {
+            "SKAdNetworkIdentifier": "cstr6suwn9.skadnetwork"
+          },
+          {
+            "SKAdNetworkIdentifier": "cstr6suwn9.skadnetwork"
+          }
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.blockbattle.app",
@@ -25,10 +37,32 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "com.google.android.gms.permission.AD_ID"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "react-native-google-mobile-ads",
+        {
+          "iosAppId": "ca-app-pub-2999547425860349~4448456676"
+        }
+      ],
+      [
+        "expo-tracking-transparency",
+        {
+          "userTrackingPermission": "この識別子は、お客様にパーソナライズされた広告を提供するために使用されます。"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "020e53b9-3734-4d26-b365-54ef7d5bc4a9"
+      }
     }
   }
 }

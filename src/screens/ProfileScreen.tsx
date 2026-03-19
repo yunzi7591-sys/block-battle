@@ -9,40 +9,13 @@ import { playDecisionSound } from '../utils/sounds';
 import { apiService } from '../services/apiService';
 import { Alert } from 'react-native';
 
-// TODO: プロデューサーが実際のGitHub PagesのURLに置換すること
-const TERMS_URL = 'https://<ユーザー名>.github.io/<リポジトリ名>/terms.html';
-const PRIVACY_URL = 'https://<ユーザー名>.github.io/<リポジトリ名>/privacy.html';
+const TERMS_URL = 'https://yunzi7591-sys.github.io/block-battle/terms.html';
+const PRIVACY_URL = 'https://yunzi7591-sys.github.io/block-battle/privacy.html';
 
 export function ProfileScreen({ navigation }: any) {
-    const { userName, highScore, rating, setUserName, uid, deleteAccount } = useUserStore();
+    const { userName, highScore, rating, setUserName, uid } = useUserStore();
     const [tempName, setTempName] = useState(userName);
     const [isSaving, setIsSaving] = useState(false);
-    const [isDeleting, setIsDeleting] = useState(false);
-
-    const handleDeleteAccount = () => {
-        Alert.alert(
-            'アカウントを削除',
-            '本当に削除しますか？この操作は取り消せません。すべてのゲームデータ（スコア、レーティング）が完全に失われます。',
-            [
-                { text: 'キャンセル', style: 'cancel' },
-                {
-                    text: '削除する',
-                    style: 'destructive',
-                    onPress: async () => {
-                        setIsDeleting(true);
-                        try {
-                            await deleteAccount();
-                            navigation.reset({ index: 0, routes: [{ name: 'Title' }] });
-                        } catch (e: any) {
-                            Alert.alert('ERROR', e.message || 'アカウントの削除に失敗しました。');
-                        } finally {
-                            setIsDeleting(false);
-                        }
-                    }
-                }
-            ]
-        );
-    };
 
     const handleSave = async () => {
         if (tempName.trim().length === 0) return;
@@ -151,23 +124,6 @@ export function ProfileScreen({ navigation }: any) {
                             </TouchableOpacity>
                         </View>
 
-                        {/* Account Deletion */}
-                        <View style={styles.dangerSection}>
-                            <TouchableOpacity
-                                style={styles.deleteBtn}
-                                onPress={handleDeleteAccount}
-                                disabled={isDeleting}
-                                accessibilityRole="button"
-                                accessibilityLabel="アカウントを削除する"
-                                accessibilityHint="アカウントとすべてのデータを完全に削除します"
-                            >
-                                <Ionicons name="trash-outline" size={18} color="#FF4444" style={{ marginRight: 8 }} />
-                                <Text style={styles.deleteBtnText}>
-                                    {isDeleting ? '削除中...' : 'アカウントを削除する'}
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
-
                     </ScrollView>
                 </KeyboardAvoidingView>
             </SafeAreaView>
@@ -262,28 +218,6 @@ const styles = StyleSheet.create({
         color: 'rgba(255,255,255,0.5)',
         fontSize: 12,
         textDecorationLine: 'underline',
-        letterSpacing: 0.5,
-    },
-    dangerSection: {
-        alignItems: 'center',
-        paddingTop: 16,
-        paddingBottom: 40,
-    },
-    deleteBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 14,
-        paddingHorizontal: 24,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: 'rgba(255,68,68,0.3)',
-        backgroundColor: 'rgba(255,68,68,0.08)',
-    },
-    deleteBtnText: {
-        color: '#FF4444',
-        fontSize: 14,
-        fontWeight: '700',
         letterSpacing: 0.5,
     },
 });

@@ -5,6 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
 import { initSounds } from './src/utils/sounds';
+import { initializeAds } from './src/services/adService';
 import { useUserStore } from './src/store/userStore';
 import { TitleScreen } from './src/screens/TitleScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
@@ -23,6 +24,8 @@ export default function App() {
 
   useEffect(() => {
     initSounds();
+    // ATT → UMP → MobileAds SDK 初期化（起動時1回のみ）
+    initializeAds();
   }, []);
 
   // Sync Auth with Hydration Safety

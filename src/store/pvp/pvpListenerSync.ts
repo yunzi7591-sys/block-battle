@@ -92,9 +92,19 @@ export function handleRoomSync(
     const incomingCount = incomingBlocks.filter(b => b !== null).length;
 
     if (shouldSyncData && incomingCount > 0 && incomingCount <= 3) {
-        gameStore.setBoard(serverBoard);
-        if (incomingBlocks.length === 3) {
-            gameStore.setBlocks(incomingBlocks as BlockShape[]);
+        // ★ クリアアニメーション中はgameStoreへの書き込みを遅延
+        const applySyncToGameStore = () => {
+            gameStore.setBoard(serverBoard);
+            if (incomingBlocks.length === 3) {
+                gameStore.setBlocks(incomingBlocks as BlockShape[]);
+            }
+        };
+
+        if (gameStore.clearingCells && gameStore.clearingCells.length > 0) {
+            console.log("[PvP/Sync] Clearing animation active. Deferring gameStore sync.");
+            setTimeout(applySyncToGameStore, 150);
+        } else {
+            applySyncToGameStore();
         }
 
         const syncUpdate: any = {

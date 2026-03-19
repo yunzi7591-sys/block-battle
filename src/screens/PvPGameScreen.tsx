@@ -22,6 +22,7 @@ import { playGongSound } from '../utils/sounds';
 import { useGameStore } from '../store/gameStore';
 import { usePvPAppStateGuard } from '../hooks/useAppStateListener';
 import { hapticLight } from '../utils/haptics';
+import { useInterstitialAd } from '../hooks/useInterstitialAd';
 
 const { width } = Dimensions.get('window');
 
@@ -31,6 +32,7 @@ export function PvPGameScreen({ navigation }: any) {
     const gameStore = useGameStore();
     const timerAnim = useRef(new Animated.Value(1)).current;
     const myUid = useUserStore(s => s.uid);
+    const { showAdThen } = useInterstitialAd();
 
     // Timer pulse (Reanimated) — visual urgency when <= 5s
     const timerPulseScale = useSharedValue(1);
@@ -98,6 +100,20 @@ export function PvPGameScreen({ navigation }: any) {
             : 'rgba(255,255,255,0.2)',
         borderWidth: 2 + timerPulseBorder.value * 2,
     }));
+
+    // ★ AI Turn Trigger — AIターン開始を検知してprocessAITurnを発火
+    useEffect(() => {
+        if (
+            store.isAIMatch &&
+            store.aiUid &&
+            store.currentTurn === store.aiUid &&
+            !store.isGameOver &&
+            store.status === 'playing'
+        ) {
+            console.log('[PvP/Screen] AI turn detected. Triggering processAITurn...');
+            store.processAITurn();
+        }
+    }, [store.currentTurn, store.isAIMatch, store.isGameOver, store.status]);
 
     // GameOver Handling
     // NOTE: Rating update is now handled server-side by Cloud Functions.
@@ -259,6 +275,18 @@ export function PvPGameScreen({ navigation }: any) {
                         oldRating={store.ratingChange !== null ? store.rating - store.ratingChange : store.rating}
                         newRating={store.rating}
                         onExit={() => navigation.navigate('Home')}
+                        onRematch={() => {
+                            const isDefeat = store.winner !== myUid;
+                            const goToLobby = () => {
+                                store.reset();
+                                navigation.replace('Lobby');
+                            };
+                            if (isDefeat) {
+                                showAdThen(goToLobby);
+                            } else {
+                                goToLobby();
+                            }
+                        }}
                     />
                 )}
 
