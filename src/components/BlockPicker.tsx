@@ -1,16 +1,18 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { useGameStore } from '../store/gameStore';
-import { useOnlinePvPStore } from '../store/onlinePvPStore';
+import { useShallow } from 'zustand/react/shallow';
 import { DraggableBlock } from './DraggableBlock';
 
 export const BlockPicker = ({ isPvP }: { isPvP?: boolean }) => {
-    const gameStore = useGameStore();
-    const currentBlocks = gameStore.currentBlocks;
+    // PERF: スコア・コンボ・クリアアニメーション等での不要な再レンダーを防止
+    const { currentBlocks, placedFlags } = useGameStore(useShallow(s => ({
+        currentBlocks: s.currentBlocks,
+        placedFlags: s.placedFlags,
+    })));
 
-    // Phase 27: Unified Block Source (Always use gameStore for rendering)
     const isPlaced = (index: number) => {
-        return gameStore.placedFlags[index];
+        return placedFlags[index];
     };
 
     return (

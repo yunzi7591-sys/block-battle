@@ -59,6 +59,7 @@ export function PvPGameScreen({ navigation }: any) {
     // SFX/UI for Timer (legacy Animated opacity)
     useEffect(() => {
         if (store.timeLeft <= 5 && store.timeLeft > 0) {
+            timerAnim.stopAnimation(); // 前のアニメーションを停止してから新規発火
             Animated.sequence([
                 Animated.timing(timerAnim, { toValue: 0.5, duration: 200, useNativeDriver: true }),
                 Animated.timing(timerAnim, { toValue: 1, duration: 200, useNativeDriver: true })
@@ -253,17 +254,28 @@ export function PvPGameScreen({ navigation }: any) {
                     <ComboPopup />
                     <BoardView isPvP={true} />
 
+                    {/* 相手ターン中: ボードは完全に見える状態で、上部にバナー表示 */}
                     {!isMyTurn && !store.isGameOver && (
-                        <BlurView intensity={30} tint="dark" style={styles.waitingOverlay} pointerEvents="none">
-                            <Text style={styles.waitingText} accessibilityRole="text" accessibilityLabel="Waiting for opponent's turn">OPPONENT IS THINKING...</Text>
-                        </BlurView>
+                        <View style={styles.opponentBanner} pointerEvents="none">
+                            <BlurView intensity={60} tint="dark" style={styles.opponentBannerBlur}>
+                                <View style={styles.opponentBannerDot} />
+                                <Text style={styles.opponentBannerText}>
+                                    OPPONENT IS THINKING... ({store.placedCount}/3)
+                                </Text>
+                            </BlurView>
+                        </View>
                     )}
                 </View>
 
-                {/* Tray / Hand (Showing Shared currentBlocks) */}
-                <View style={[styles.trayContainer, !isMyTurn && { opacity: 0.5 }]}>
+                {/* Tray / Hand — ターン切替時にスムーズにフェード */}
+                <ReAnimated.View style={[
+                    styles.trayContainer,
+                    useAnimatedStyle(() => ({
+                        opacity: withTiming(isMyTurn ? 1 : 0.4, { duration: 250 }),
+                    })),
+                ]}>
                     <BlockPicker isPvP={true} />
-                </View>
+                </ReAnimated.View>
 
                 {/* Game Over Overlay — Phase B: Rich animated result screen */}
                 {store.isGameOver && (
@@ -282,7 +294,7 @@ export function PvPGameScreen({ navigation }: any) {
                                 navigation.replace('Lobby');
                             };
                             if (isDefeat) {
-                                showAdThen(goToLobby);
+                                showAdThen(goToLobby, true); // force=true: 敗北時は確実に広告表示
                             } else {
                                 goToLobby();
                             }
@@ -337,8 +349,10 @@ const styles = StyleSheet.create({
     progressContainer: { height: 2, width: '100%', backgroundColor: 'rgba(255,255,255,0.05)' },
     progressBar: { height: '100%' },
     boardContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    waitingOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 10 },
-    waitingText: { color: '#FFF', fontWeight: '800', fontSize: 18, letterSpacing: 2, opacity: 0.6 },
+    opponentBanner: { position: 'absolute', top: 8, left: 0, right: 0, alignItems: 'center', zIndex: 10 },
+    opponentBannerBlur: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(233,69,96,0.3)' },
+    opponentBannerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#E94560', marginRight: 8 },
+    opponentBannerText: { color: 'rgba(255,255,255,0.8)', fontWeight: '700', fontSize: 12, letterSpacing: 1 },
     trayContainer: { height: 180, justifyContent: 'center' },
     syncingOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 200 },
     syncingText: { color: '#FFF', fontSize: 24, fontWeight: '900', letterSpacing: 2 },

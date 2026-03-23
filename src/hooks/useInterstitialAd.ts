@@ -40,6 +40,10 @@ const AD_UNIT_ID = _adsAvailable
 
 // 広告表示の最小間隔 — 連続表示を防止
 const MIN_INTERVAL_MS = 60 * 1000; // 60秒
+// N回プレイごとに広告を表示（インターバル + 回数の両方を満たす場合のみ）
+const GAMES_PER_AD = 3;
+// モジュールレベルのプレイカウンター（フック再マウントでも維持）
+let _globalGameCount = 0;
 
 export function useInterstitialAd() {
     const adRef = useRef<any>(null);
@@ -109,7 +113,14 @@ export function useInterstitialAd() {
      * 広告を表示してからコールバックを実行する。
      * 広告未ロード / 間隔制限中 / ネイティブ未対応時はスキップして即コールバック。
      */
-    const showAdThen = useCallback((callback: () => void) => {
+    /**
+     * 広告を表示してからコールバックを実行する。
+     * プレイ回数 + 最小間隔の両方を満たす場合のみ広告を表示。
+     * force=true で回数カウントをスキップ（PvP敗北時など）。
+     */
+    const showAdThen = useCallback((callback: () => void, force: boolean = false) => {
+        _globalGameCount++;
+
         if (!_adsAvailable) {
             callback();
             return;
@@ -117,8 +128,10 @@ export function useInterstitialAd() {
 
         const now = Date.now();
         const elapsed = now - lastShownRef.current;
+        const intervalOk = elapsed >= MIN_INTERVAL_MS;
+        const countOk = force || (_globalGameCount % GAMES_PER_AD === 0);
 
-        if (!isLoadedRef.current || !adRef.current || elapsed < MIN_INTERVAL_MS) {
+        if (!isLoadedRef.current || !adRef.current || !intervalOk || !countOk) {
             callback();
             return;
         }

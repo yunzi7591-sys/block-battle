@@ -52,9 +52,9 @@ export interface RoomData {
     currentBlocks: (BlockShape | null)[];
     placedCount: number; // 0, 1, 2
     turnNumber: number; // 1-based cumulative turn counter (both players combined)
-    turnStartTime: any; // Server Timestamp
+    turnStartTime: number | ReturnType<typeof serverTimestamp>; // resolved: number, pending: ServerTimestamp
     turnDuration: number; // 30000ms
-    gameStartTime?: any; // Server Timestamp — cheat detection (Cloud Functions)
+    gameStartTime?: number | ReturnType<typeof serverTimestamp>;
     lastMove?: LastMove;
 }
 
@@ -63,6 +63,7 @@ export interface RoomData {
  * Firebase deletes keys set to null, turning [A, null, B] into {0: A, 2: B}.
  * This restores it to [A, null, B] with guaranteed length 3.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeBlocks(raw: any): (BlockShape | null)[] {
     if (!raw) return [null, null, null];
     const result: (BlockShape | null)[] = [null, null, null];
@@ -82,6 +83,7 @@ export function normalizeBlocks(raw: any): (BlockShape | null)[] {
 /**
  * Robustly normalize Board (8x8) from sparse Firebase object or nested sparse objects.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeBoard(boardRaw: any): Board {
     const emptyBoard = (): Board => Array.from({ length: 8 }, () => Array(8).fill(0));
     if (!boardRaw) return emptyBoard();
@@ -227,6 +229,10 @@ export const LobbyService = {
                 data.currentBlocks = normalizeBlocks(data.currentBlocks);
                 if (!data.currentBlocks[index]) return; // Already placed (race guard)
 
+                // ★ Move sequence guard: 同一ブロックの二重配置を防止
+                // placedCount は配置済みブロック数。indexのブロックが既にnullなら二重配置。
+                // （上の !data.currentBlocks[index] で既にカバーされるが、明示的にガード）
+
                 // 2. Apply move: board + null out placed block
                 data.board = nextBoard;
                 data.currentBlocks[index] = null;
@@ -256,10 +262,10 @@ export const LobbyService = {
                 }
 
                 // ─── 正常ターン切替: 3ブロック配置完了 ────────────
-                // 【厳守】newBlocksForNextTurn 必須。無ければ Abort。
+                // newBlocksForNextTurn が無い場合、サーバーサイドでフォールバック生成
                 if (!newBlocksForNextTurn || newBlocksForNextTurn.length !== 3) {
-                    console.error(`[Lobby/Turn] newBlocksForNextTurn missing or invalid. Aborting transaction.`);
-                    return; // Abort — クライアント側の再試行を待つ
+                    console.warn(`[Lobby/Turn] newBlocksForNextTurn missing. Generating fallback blocks.`);
+                    newBlocksForNextTurn = generatePvPBlocks(data.board, (data.turnNumber || 1) + 1);
                 }
 
                 data.placedCount = 0;

@@ -1,5 +1,5 @@
 import React, { useRef, useCallback, useEffect, useState, useMemo } from 'react';
-import { View, StyleSheet, LayoutChangeEvent, Animated, Text, Easing, ViewStyle } from 'react-native';
+import { View, StyleSheet, LayoutChangeEvent, Animated, Text, ViewStyle } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useGameStore } from '../store/gameStore';
 import { useOnlinePvPStore } from '../store/onlinePvPStore';
@@ -12,35 +12,41 @@ import { hapticHeavy } from '../utils/haptics';
 import { playClearSound, playComboSound, playCheerSound } from '../utils/sounds';
 import ReAnimated, { useSharedValue, useAnimatedStyle, withSequence, withTiming, Easing as REasing } from 'react-native-reanimated';
 
-// --- Giga Glass Shatter Particle (for Perfect Clear) ---
+// --- Giga Glass Shatter Particle (Reanimated UIThread — 60fps保証) ---
 const SHATTER_COLORS = ['#4DA8DA', '#9B59B6', '#E74C3C', '#F1C40F', '#2ECC71', '#E67E22'];
-function GlassShatterParticle({ id }: { id: number }) {
-    const anim = useRef(new Animated.Value(0)).current;
-    const angle = Math.random() * Math.PI * 2;
-    const distance = 150 + Math.random() * 200;
-    const destX = Math.cos(angle) * distance;
-    const destY = Math.sin(angle) * distance;
-    const color = SHATTER_COLORS[Math.floor(Math.random() * SHATTER_COLORS.length)];
-    const size = 15 + Math.random() * 25;
+const PARTICLE_COUNT = 20; // 25→20に削減（視覚的に同等、負荷軽減）
+
+interface ParticleConfig {
+    destX: number; destY: number; color: string; size: number;
+}
+
+function GlassShatterParticle({ config }: { config: ParticleConfig }) {
+    const progress = useSharedValue(0);
     useEffect(() => {
-        Animated.timing(anim, { toValue: 1, duration: 1500, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
-    }, [anim]);
+        progress.value = withTiming(1, { duration: 1500, easing: REasing.out(REasing.cubic) });
+    }, []);
+    const animStyle = useAnimatedStyle(() => {
+        const p = progress.value;
+        return {
+            opacity: p < 0.7 ? 1 : 1 - (p - 0.7) / 0.3,
+            transform: [
+                { translateX: p * config.destX },
+                { translateY: p * config.destY },
+                { rotate: `${p * 360}deg` },
+                { scale: 1 - p * 0.8 },
+            ],
+        };
+    });
     return (
-        <Animated.View
+        <ReAnimated.View
             style={[
                 {
                     position: 'absolute',
-                    width: size, height: size,
-                    backgroundColor: color,
+                    width: config.size, height: config.size,
+                    backgroundColor: config.color,
                     borderWidth: 1, borderColor: 'rgba(255,255,255,0.5)',
-                    opacity: anim.interpolate({ inputRange: [0, 0.7, 1], outputRange: [1, 1, 0] }),
-                    transform: [
-                        { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, destX] }) },
-                        { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [0, destY] }) },
-                        { rotate: anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) },
-                        { scale: anim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.2] }) },
-                    ],
                 },
+                animStyle,
             ]}
         />
     );
@@ -48,11 +54,20 @@ function GlassShatterParticle({ id }: { id: number }) {
 
 function GlassShatterEffect() {
     const showPerfectClear = useGameStore(s => s.showPerfectClear);
-    const [particles, setParticles] = useState<number[]>([]);
+    const [particles, setParticles] = useState<ParticleConfig[]>([]);
     useEffect(() => {
         if (showPerfectClear) {
-            const newParticles = Array.from({ length: 25 }, (_, i) => Date.now() + i);
-            setParticles(newParticles);
+            const configs: ParticleConfig[] = Array.from({ length: PARTICLE_COUNT }, () => {
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 150 + Math.random() * 200;
+                return {
+                    destX: Math.cos(angle) * distance,
+                    destY: Math.sin(angle) * distance,
+                    color: SHATTER_COLORS[Math.floor(Math.random() * SHATTER_COLORS.length)],
+                    size: 15 + Math.random() * 25,
+                };
+            });
+            setParticles(configs);
             const timer = setTimeout(() => setParticles([]), 2000);
             return () => clearTimeout(timer);
         }
@@ -60,7 +75,7 @@ function GlassShatterEffect() {
     if (particles.length === 0) return null;
     return (
         <View style={styles.shatterEffectContainer} pointerEvents="none">
-            {particles.map(id => <GlassShatterParticle key={id} id={id} />)}
+            {particles.map((cfg, i) => <GlassShatterParticle key={i} config={cfg} />)}
         </View>
     );
 }

@@ -109,6 +109,8 @@ export const useGameStore = create<GameStore>()(subscribeWithSelector((set, get)
     isBgmPlaying: false,
 
     init: () => {
+        // 前回のperfectClearTimerが残留しないよう明示的にクリア
+        if (perfectClearTimer) { clearTimeout(perfectClearTimer); perfectClearTimer = null; }
         playBGM();
         set({
             ...makeInitialState(),

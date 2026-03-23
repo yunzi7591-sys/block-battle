@@ -138,19 +138,20 @@ export function createPlaceBlockSync(set: PvPSet, get: PvPGet) {
 
                     // ★ クリアアニメーション中はリコンシリエーションを遅延
                     const applyReconciliation = () => {
-                        if (!get().isProcessingPlacement) {
-                            gs.setBoard(serverBoard);
-                            if (serverBlocks.filter(b => b !== null).length > 0) {
-                                gs.setBlocks(serverBlocks as BlockShape[]);
+                        try {
+                            if (!get().isProcessingPlacement) {
+                                gs.setBoard(serverBoard);
+                                if (serverBlocks.filter(b => b !== null).length > 0) {
+                                    gs.setBlocks(serverBlocks as BlockShape[]);
+                                }
+                                set({ sharedBoard: serverBoard, currentBlocks: serverBlocks });
                             }
-                            set({ sharedBoard: serverBoard, currentBlocks: serverBlocks });
-                            console.log("[PvP/Reconciliation] State re-synced from server after makeMove.");
+                        } catch (err) {
+                            console.warn("[PvP/Reconciliation] applyReconciliation error:", err);
                         }
                     };
 
                     if (gs.clearingCells && gs.clearingCells.length > 0) {
-                        // アニメーション完了後にリコンシリエーション実行
-                        console.log("[PvP/Reconciliation] Clearing animation in progress. Deferring reconciliation.");
                         setTimeout(applyReconciliation, 150);
                     } else {
                         applyReconciliation();
@@ -393,8 +394,9 @@ export function createProcessAITurn(set: PvPSet, get: PvPGet) {
             let placedCount = 0;
 
             for (let i = 0; i < 3; i++) {
-                // ゲーム終了チェック
-                if (get().isGameOver || !get().isAIMatch) return;
+                // ゲーム終了 or ストアリセット済み（画面離脱）チェック
+                const guard = get();
+                if (guard.isGameOver || !guard.isAIMatch || guard.status === 'matching') return;
 
                 // 最適手を探索
                 const move = findBestMove(currentBoard, currentBlocks);
@@ -410,8 +412,9 @@ export function createProcessAITurn(set: PvPSet, get: PvPGet) {
                 const thinkTime = 1000 + Math.random() * 1000;
                 await new Promise(resolve => setTimeout(resolve, thinkTime));
 
-                // ディレイ後の再チェック
-                if (get().isGameOver || !get().isAIMatch) return;
+                // ディレイ後の再チェック（画面離脱でreset()された場合もガード）
+                const postDelay = get();
+                if (postDelay.isGameOver || !postDelay.isAIMatch || postDelay.status === 'matching') return;
 
                 // 手を適用
                 const shape = currentBlocks[move.blockIndex]!;

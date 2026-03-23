@@ -17,6 +17,11 @@ import { StainedGlassCell } from './StainedGlassCell';
 import { hapticLight, hapticMedium, hapticError } from '../utils/haptics';
 import { playPlaceSound, playErrorSound, playBGM } from '../utils/sounds';
 
+/** ドラッグ中スケール: ボードセルより少し大きく表示し視認性向上 */
+const DRAG_SCALE = 1.1;
+/** ドラッグ中の透過: プレビュー（ボード上のスナップ表示）を主たるガイドにする */
+const DRAG_OPACITY = 0.75;
+
 interface Props {
     block: BlockShape;
     index: number;
@@ -29,6 +34,7 @@ const BLOCK_PADDING = BOARD_PADDING; // Use shared constant
 export function DraggableBlock({ block, index, placed, isPvP }: Props) {
     const pan = useRef(new Animated.ValueXY()).current;
     const scaleAnim = useRef(new Animated.Value(0.5)).current;
+    const opacityAnim = useRef(new Animated.Value(1)).current;
     const [isDragging, setIsDragging] = useState(false);
     const isDraggingRef = useRef(false);
 
@@ -161,13 +167,20 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                 pan.setOffset({ x: 0, y: LIFT_OFFSET });
                 pan.setValue({ x: 0, y: 0 });
 
-                // Scale to 1.0 — exact match with board cell size
-                Animated.spring(scaleAnim, {
-                    toValue: 1.0,
-                    friction: 8,
-                    tension: 140,
-                    useNativeDriver: true,
-                }).start();
+                // Scale to DRAG_SCALE — slightly larger than board cells for visibility
+                Animated.parallel([
+                    Animated.spring(scaleAnim, {
+                        toValue: DRAG_SCALE,
+                        friction: 8,
+                        tension: 140,
+                        useNativeDriver: true,
+                    }),
+                    Animated.timing(opacityAnim, {
+                        toValue: DRAG_OPACITY,
+                        duration: 120,
+                        useNativeDriver: true,
+                    }),
+                ]).start();
             },
 
             onPanResponderMove: (
@@ -272,6 +285,7 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                         activePlaceBlock(index, target.row, target.col);
                         pan.setValue({ x: 0, y: 0 });
                         scaleAnim.setValue(trayScale);
+                        opacityAnim.setValue(1);
                         lastPreviewRef.current = null;
                         return; // Success path - skip cancel animation
                     }
@@ -284,6 +298,7 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                 Animated.parallel([
                     Animated.spring(pan, { toValue: { x: 0, y: 0 }, friction: 7, useNativeDriver: true }),
                     Animated.spring(scaleAnim, { toValue: trayScale, friction: 7, useNativeDriver: true }),
+                    Animated.timing(opacityAnim, { toValue: 1, duration: 150, useNativeDriver: true }),
                 ]).start();
             },
         })
@@ -304,6 +319,7 @@ export function DraggableBlock({ block, index, placed, isPvP }: Props) {
                 {
                     width: blockCols * renderCellSize + 2 * BLOCK_PADDING,
                     height: blockRows * renderCellSize + 2 * BLOCK_PADDING,
+                    opacity: opacityAnim,
                     transform: [
                         { translateX: pan.x },
                         { translateY: pan.y },

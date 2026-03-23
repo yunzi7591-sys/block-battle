@@ -8,6 +8,9 @@ import { useGameStore } from '../gameStore';
 import { useUserStore } from '../userStore';
 import { PvPSet, PvPGet } from './pvpTypes';
 
+// 遅延同期タイマー（最新のみ適用するため前回をキャンセル可能にする）
+let _pendingSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
  * Core room data synchronization handler.
  * Called by both Host and Guest listeners when room data changes.
@@ -94,15 +97,20 @@ export function handleRoomSync(
     if (shouldSyncData && incomingCount > 0 && incomingCount <= 3) {
         // ★ クリアアニメーション中はgameStoreへの書き込みを遅延
         const applySyncToGameStore = () => {
-            gameStore.setBoard(serverBoard);
-            if (incomingBlocks.length === 3) {
-                gameStore.setBlocks(incomingBlocks as BlockShape[]);
+            try {
+                gameStore.setBoard(serverBoard);
+                if (incomingBlocks.length === 3) {
+                    gameStore.setBlocks(incomingBlocks as BlockShape[]);
+                }
+            } catch (err) {
+                console.warn("[PvP/Sync] applySyncToGameStore error:", err);
             }
         };
 
         if (gameStore.clearingCells && gameStore.clearingCells.length > 0) {
-            console.log("[PvP/Sync] Clearing animation active. Deferring gameStore sync.");
-            setTimeout(applySyncToGameStore, 150);
+            // 前回の遅延同期をキャンセルして最新のみ適用
+            if (_pendingSyncTimer) clearTimeout(_pendingSyncTimer);
+            _pendingSyncTimer = setTimeout(() => { _pendingSyncTimer = null; applySyncToGameStore(); }, 150);
         } else {
             applySyncToGameStore();
         }
@@ -124,7 +132,7 @@ export function handleRoomSync(
     set({
         currentTurn: serverTurnUid,
         placedCount: serverMoveCount,
-        turnStartTime: roomData.turnStartTime || null,
+        turnStartTime: (typeof roomData.turnStartTime === 'number' ? roomData.turnStartTime : null) as number | null,
         status: mappedStatus,
         lastMove: roomData.lastMove
             ? { row: roomData.lastMove.row, col: roomData.lastMove.col, uid: roomData.lastMove.uid }

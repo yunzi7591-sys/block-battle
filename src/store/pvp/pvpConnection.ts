@@ -10,9 +10,46 @@ import { generatePvPBlocks } from '../../game/survivalAlgorithm';
 import { handleRoomSync, handleGameCompletion } from './pvpListenerSync';
 import { PvPSet, PvPGet } from './pvpTypes';
 import { getRandomAIName } from '../../utils/randomNames';
+import { ref, onValue } from 'firebase/database';
+import { rtdb } from '../../config/firebase';
 
 // ─── AI Match Timer (module-level) ──────────────────────
 let _aiMatchTimerId: ReturnType<typeof setTimeout> | null = null;
+
+// ─── Firebase 接続監視 ─────────────────────────────────
+let _connectionUnsub: (() => void) | null = null;
+let _wasDisconnected = false;
+
+/**
+ * Firebase RTDB接続状態を監視。
+ * 切断→復帰時に forceResync を自動発火してステートを再同期。
+ */
+function startConnectionMonitor(get: PvPGet) {
+    if (_connectionUnsub) return; // 既に監視中
+    const connRef = ref(rtdb, '.info/connected');
+    const unsub = onValue(connRef, (snap) => {
+        const connected = snap.val() === true;
+        if (!connected) {
+            _wasDisconnected = true;
+            return;
+        }
+        // 復帰時: アクティブなPvP対戦中なら自動resync
+        if (_wasDisconnected) {
+            _wasDisconnected = false;
+            const state = get();
+            if (state.status === 'playing' && !state.isGameOver && !state.isAIMatch) {
+                console.log('[Connection] Network restored during PvP. Force resyncing...');
+                state.forceResync();
+            }
+        }
+    });
+    _connectionUnsub = () => unsub();
+}
+
+function stopConnectionMonitor() {
+    if (_connectionUnsub) { _connectionUnsub(); _connectionUnsub = null; }
+    _wasDisconnected = false;
+}
 
 export function clearAIMatchTimer() {
     if (_aiMatchTimerId !== null) {
@@ -37,6 +74,9 @@ function setupRoomListener(
         prev._unsubscribeRoom();
         set({ _unsubscribeRoom: null, _subscribedRoomId: null });
     }
+
+    // ★ 接続監視を開始（切断→復帰時にforceResyncが自動発火）
+    startConnectionMonitor(get);
 
     const unsub = LobbyService.subscribeToRoom(roomId, (roomData: RoomData) => {
         set({
@@ -281,8 +321,9 @@ export function createCancelAutoMatch(set: PvPSet, get: PvPGet) {
 
 export function createReset(set: PvPSet, get: PvPGet) {
     return () => {
-        // ★ AIタイマー解除
+        // ★ AIタイマー解除 + 接続監視停止
         clearAIMatchTimer();
+        stopConnectionMonitor();
 
         const state = get();
         if (state.status === 'playing') {

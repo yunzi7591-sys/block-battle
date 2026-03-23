@@ -1,8 +1,9 @@
 {
   "rules": {
     "rooms": {
+      ".read": "auth != null",
+      ".indexOn": ["status", "createdAt"],
       "$roomId": {
-        ".read": "auth != null",
         ".write": "auth != null && (
           (!data.exists())
           || (data.child('player1/uid').val() === auth.uid)

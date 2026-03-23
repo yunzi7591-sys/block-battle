@@ -102,14 +102,18 @@ export const useUserStore = create<UserState>()(
 
                 setAuthLoading(true);
                 try {
-                    const finalUid = await apiService.loginAnonymously(uid || undefined);
-                    console.log(`[Auth/Persistence] Session UID: ${finalUid} (Previous: ${uid || 'N/A'})`);
+                    // ★ 15秒タイムアウト: オフライン起動時に永久待ちを防止
+                    const AUTH_TIMEOUT_MS = 15000;
+                    const loginPromise = apiService.loginAnonymously(uid || undefined);
+                    const timeoutPromise = new Promise<never>((_, reject) =>
+                        setTimeout(() => reject(new Error('Auth timeout: network unreachable')), AUTH_TIMEOUT_MS)
+                    );
+                    const finalUid = await Promise.race([loginPromise, timeoutPromise]);
                     setUid(finalUid);
 
                     // --- Phase 41: Restore Profile from Server ---
                     const profile = await apiService.getUserProfile(finalUid);
                     if (profile) {
-                        console.log(`[Auth] Profile restored for ${finalUid}:`, profile);
                         set({
                             userName: profile.name || state.userName,
                             highScore: Math.max(state.highScore, profile.highScore || 0),
@@ -121,6 +125,7 @@ export const useUserStore = create<UserState>()(
                     }
                 } catch (e) {
                     console.error('[Auth] Failed to initialize anonymous auth:', e);
+                    // ★ オフラインでもアプリは使用可能（ソロモード・過去のハイスコア表示）
                 } finally {
                     setAuthLoading(false);
                 }

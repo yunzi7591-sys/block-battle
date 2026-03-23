@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, ScrollView, TurboModuleRegistry } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { CathedralBackground } from '../components/CathedralBackground';
@@ -7,6 +7,26 @@ import { playDecisionSound } from '../utils/sounds';
 import { LeaderboardWidget } from '../components/LeaderboardWidget';
 import { useUserStore } from '../store/userStore';
 import { Ionicons } from '@expo/vector-icons';
+
+// ─── Banner Ad (Graceful degradation for Expo Go) ───
+let BannerAd: any = null;
+let BannerAdSize: any = null;
+let TestIds: any = null;
+let _bannerAvailable = false;
+try {
+    const nativeModule = TurboModuleRegistry.get('RNGoogleMobileAdsModule');
+    if (nativeModule) {
+        const mobileAds = require('react-native-google-mobile-ads');
+        BannerAd = mobileAds.BannerAd;
+        BannerAdSize = mobileAds.BannerAdSize;
+        TestIds = mobileAds.TestIds;
+        _bannerAvailable = true;
+    }
+} catch (e) { /* ads not available */ }
+
+const BANNER_AD_UNIT_ID = _bannerAvailable
+    ? (__DEV__ ? TestIds?.BANNER : 'ca-app-pub-2999547425860349/9876543210')
+    : '';
 
 export function HomeScreen({ navigation }: any) {
     const { highScore } = useUserStore();
@@ -84,6 +104,18 @@ export function HomeScreen({ navigation }: any) {
 
                 {/* Global Leaderboard Widget (Moved to bottom) */}
                 <LeaderboardWidget />
+
+                {/* Banner Ad — 低侵襲な常設広告 */}
+                {_bannerAvailable && BannerAd && (
+                    <View style={styles.bannerContainer}>
+                        <BannerAd
+                            unitId={BANNER_AD_UNIT_ID}
+                            size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+                            requestOptions={{ requestNonPersonalizedAdsOnly: true }}
+                            onAdFailedToLoad={(error: any) => console.log('[Ad] Banner failed:', error)}
+                        />
+                    </View>
+                )}
             </ScrollView>
         </View>
     );
@@ -164,5 +196,9 @@ const styles = StyleSheet.create({
         fontSize: 20,
         fontWeight: '700',
         letterSpacing: 2,
+    },
+    bannerContainer: {
+        alignItems: 'center',
+        marginTop: 20,
     },
 });

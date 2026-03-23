@@ -1,11 +1,13 @@
 module.exports = function (api) {
     api.cache(true);
+    const isProduction = process.env.NODE_ENV === 'production' || process.env.BABEL_ENV === 'production';
     return {
         presets: ['babel-preset-expo'],
         plugins: [
-            // Phase 42: Strip console.log/info/debug in production builds.
+            // Strip console.log/info/debug in production builds.
             // Keeps console.error and console.warn for crash diagnostics.
-            ...(process.env.NODE_ENV === 'production'
+            // Covers: EAS Build (NODE_ENV=production), expo start --no-dev (BABEL_ENV=production)
+            ...(isProduction
                 ? [['transform-remove-console', { exclude: ['error', 'warn'] }]]
                 : []),
             // IMPORTANT: react-native-reanimated/plugin MUST be listed LAST.

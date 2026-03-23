@@ -172,7 +172,8 @@ const RELAXATION_THRESHOLD = 15; // attempt 15 以降で緩和ウェイトに切
 
 // ─── Time-Slicing Yield ─────────────────────────────────
 // JSイベントループを解放し、UI描画を優先させる
-const YIELD_INTERVAL = 3; // 3 attempts ごとに yield
+// 毎回 yield することで低スペック端末でのUIフリーズを防止
+const YIELD_INTERVAL = 1; // 毎 attempt で yield（旧: 3）
 const yieldToUI = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
 
 // ─── Solo Mode Block Generation ─────────────────────────
