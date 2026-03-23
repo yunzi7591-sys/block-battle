@@ -1,22 +1,20 @@
 /**
  * adService.ts — ATT + UMP (GDPR) + MobileAds 初期化サービス
  *
- * アプリ起動時に1回だけ呼ぶ。
+ * ATTダイアログはアプリUIが完全に表示された後に呼ぶ。
  * 1. ATT (App Tracking Transparency) ダイアログを表示
  * 2. UMP (User Messaging Platform) で GDPR 同意フォームを処理
  * 3. MobileAds SDK を初期化
  *
- * Expo Go 環境ではネイティブモジュールが存在しないため全処理をスキップ。
+ * Expo Go 環境ではネイティブモジュールが存在しないため広告処理をスキップ。
  */
 
-import { Platform, TurboModuleRegistry } from 'react-native';
+import { Platform, TurboModuleRegistry, AppState } from 'react-native';
 
 let _initialized = false;
 
 /**
  * ネイティブモジュールの存在を安全にチェック。
- * require()するとTurboModuleが即座に呼ばれてERRORになるので、
- * 先にレジストリで存在確認する。
  */
 function isNativeModuleAvailable(moduleName: string): boolean {
     try {
@@ -28,20 +26,76 @@ function isNativeModuleAvailable(moduleName: string): boolean {
 
 const _adsNativeAvailable = isNativeModuleAvailable('RNGoogleMobileAdsModule');
 
+/**
+ * ATTダイアログを表示する。
+ * アプリがアクティブ状態であることを確認し、少し待ってから表示。
+ * iOS のみ。undetermined の場合のみダイアログを出す。
+ */
+async function requestATT(): Promise<void> {
+    if (Platform.OS !== 'ios') return;
+
+    try {
+        const {
+            requestTrackingPermissionsAsync,
+            getTrackingPermissionsAsync,
+        } = require('expo-tracking-transparency');
+
+        // まず現在のステータスを確認
+        const current = await getTrackingPermissionsAsync();
+        console.log(`[Ad/ATT] Current tracking status: ${current.status}`);
+
+        // undetermined の場合のみダイアログを表示
+        if (current.status !== 'undetermined') {
+            console.log(`[Ad/ATT] Already determined (${current.status}). Skipping dialog.`);
+            return;
+        }
+
+        // ★ アプリが完全にアクティブになるのを待つ
+        await waitForAppActive();
+
+        // ★ UIが描画完了するまで少し待つ（Apple推奨）
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        const { status } = await requestTrackingPermissionsAsync();
+        console.log(`[Ad/ATT] Tracking permission result: ${status}`);
+    } catch (e) {
+        console.warn('[Ad/ATT] expo-tracking-transparency not available:', e);
+    }
+}
+
+/**
+ * AppState が 'active' になるまで待機するヘルパー。
+ */
+function waitForAppActive(): Promise<void> {
+    return new Promise(resolve => {
+        if (AppState.currentState === 'active') {
+            resolve();
+            return;
+        }
+        const subscription = AppState.addEventListener('change', (state) => {
+            if (state === 'active') {
+                subscription.remove();
+                resolve();
+            }
+        });
+        // 5秒でタイムアウト（万一activeにならない場合）
+        setTimeout(() => {
+            subscription.remove();
+            resolve();
+        }, 5000);
+    });
+}
+
+/**
+ * 広告初期化のエントリーポイント。
+ * App.tsx から起動時に1回だけ呼ぶ。
+ */
 export async function initializeAds(): Promise<void> {
     if (_initialized) return;
     _initialized = true;
 
     // ─── 1. ATT (iOS only) ──────────────────────────────
-    if (Platform.OS === 'ios') {
-        try {
-            const { requestTrackingPermissionsAsync } = require('expo-tracking-transparency');
-            const { status } = await requestTrackingPermissionsAsync();
-            console.log(`[Ad/ATT] Tracking permission status: ${status}`);
-        } catch (e) {
-            console.warn('[Ad/ATT] expo-tracking-transparency not available.');
-        }
-    }
+    await requestATT();
 
     // Expo Go: ネイティブ広告モジュールなし → 以降スキップ
     if (!_adsNativeAvailable) {
